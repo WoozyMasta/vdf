@@ -30,6 +30,9 @@ if err != nil {
 }
 ```
 
+For file inputs, use `ParseFile` with optional options or convenience wrappers:
+`ParseTextFile` and `ParseAutoFile`.
+
 ## Writing VDF
 
 For full document encode, use `WriteString`, `AppendText`, `AppendBinary`, or `NewEncoder`.
@@ -61,6 +64,9 @@ enc := vdf.NewEncoder(w, vdf.EncodeOptions{
 })
 err := enc.EncodeDocument(doc)
 ```
+
+For file output, use `WriteFile` with optional options or convenience wrappers:
+`WriteTextFile` and `WriteBinaryFile`.
 
 ## Building a VDF document
 

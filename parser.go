@@ -116,8 +116,14 @@ func ParseString(s string) (*Document, error) {
 	return NewDecoder(strings.NewReader(s), DecodeOptions{Format: FormatText}).DecodeDocument()
 }
 
-// ParseFile decodes text VDF from file path.
-func ParseFile(path string) (doc *Document, err error) {
+// ParseFile decodes VDF from file path.
+// Without options it decodes as text format.
+func ParseFile(path string, opts ...DecodeOptions) (doc *Document, err error) {
+	effective := DecodeOptions{Format: FormatText}
+	if len(opts) > 0 {
+		effective = opts[0]
+	}
+
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
@@ -129,7 +135,12 @@ func ParseFile(path string) (doc *Document, err error) {
 		}
 	}()
 
-	return Parse(f)
+	return NewDecoder(f, effective).DecodeDocument()
+}
+
+// ParseTextFile decodes text VDF from file path.
+func ParseTextFile(path string) (*Document, error) {
+	return ParseFile(path, DecodeOptions{Format: FormatText})
 }
 
 // detectStreamFormat peeks a short prefix and infers format heuristically.

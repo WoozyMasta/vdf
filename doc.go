@@ -25,6 +25,8 @@ Use Decoder for stream-oriented decoding from io.Reader:
 	doc, err := dec.DecodeDocument()
 
 For byte slices and strings use ParseBytes and ParseString.
+For file paths use ParseFile with optional DecodeOptions,
+or ParseTextFile/ParseAutoFile.
 
 NextEvent provides traversal events over the decoded document:
 
@@ -39,6 +41,8 @@ Use Encoder for stream-oriented output to io.Writer:
 
 Manual streaming methods are available for incremental writing:
 StartObject, WriteString, WriteUint32, EndObject, Close.
+For file output use WriteFile with optional EncodeOptions,
+or WriteTextFile/WriteBinaryFile.
 
 # Fast paths
 

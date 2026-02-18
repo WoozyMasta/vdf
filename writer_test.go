@@ -3,6 +3,7 @@ package vdf
 import (
 	"bytes"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -133,5 +134,57 @@ func TestEncodeDocumentValidateOption(t *testing.T) {
 	_, err = AppendText(nil, doc, EncodeOptions{Format: FormatText, Validate: true})
 	if !errors.Is(err, ErrInvalidNodeState) {
 		t.Fatalf("AppendText(validate=true) error = %v, want ErrInvalidNodeState", err)
+	}
+}
+
+func TestWriteFileWrappers(t *testing.T) {
+	t.Parallel()
+
+	doc := NewDocumentWithFormat(FormatText)
+	root := NewObjectNode("root")
+	root.Add(NewStringNode("name", "srv"))
+	doc.AddRoot(root)
+
+	dir := t.TempDir()
+	defaultPath := filepath.Join(dir, "default.vdf")
+	if err := WriteFile(defaultPath, doc); err != nil {
+		t.Fatalf("WriteFile(default) returned error: %v", err)
+	}
+
+	defaultDoc, err := ParseTextFile(defaultPath)
+	if err != nil {
+		t.Fatalf("ParseTextFile(default) returned error: %v", err)
+	}
+
+	if defaultDoc.Format != FormatText {
+		t.Fatalf("default WriteFile format = %v, want %v", defaultDoc.Format, FormatText)
+	}
+
+	textPath := filepath.Join(dir, "sample.vdf")
+	if err := WriteTextFile(textPath, doc); err != nil {
+		t.Fatalf("WriteTextFile() returned error: %v", err)
+	}
+
+	textDoc, err := ParseTextFile(textPath)
+	if err != nil {
+		t.Fatalf("ParseTextFile() returned error: %v", err)
+	}
+
+	if textDoc.Format != FormatText {
+		t.Fatalf("text file format = %v, want %v", textDoc.Format, FormatText)
+	}
+
+	binPath := filepath.Join(dir, "sample.bin")
+	if err := WriteBinaryFile(binPath, doc); err != nil {
+		t.Fatalf("WriteBinaryFile() returned error: %v", err)
+	}
+
+	binDoc, err := ParseAutoFile(binPath)
+	if err != nil {
+		t.Fatalf("ParseAutoFile(binary) returned error: %v", err)
+	}
+
+	if binDoc.Format != FormatBinary {
+		t.Fatalf("binary file format = %v, want %v", binDoc.Format, FormatBinary)
 	}
 }

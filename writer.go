@@ -176,8 +176,14 @@ func WriteString(doc *Document) (string, error) {
 	return string(out), nil
 }
 
-// WriteFile encodes document as text VDF file.
-func WriteFile(path string, doc *Document) (err error) {
+// WriteFile encodes document to file.
+// Without options it writes text format.
+func WriteFile(path string, doc *Document, opts ...EncodeOptions) (err error) {
+	effective := EncodeOptions{Format: FormatText}
+	if len(opts) > 0 {
+		effective = opts[0]
+	}
+
 	f, err := os.Create(path)
 	if err != nil {
 		return fmt.Errorf("failed to create file: %w", err)
@@ -189,7 +195,17 @@ func WriteFile(path string, doc *Document) (err error) {
 		}
 	}()
 
-	return Write(f, doc)
+	return NewEncoder(f, effective).EncodeDocument(doc)
+}
+
+// WriteTextFile encodes document as text VDF file.
+func WriteTextFile(path string, doc *Document) error {
+	return WriteFile(path, doc, EncodeOptions{Format: FormatText})
+}
+
+// WriteBinaryFile encodes document as binary VDF file.
+func WriteBinaryFile(path string, doc *Document) error {
+	return WriteFile(path, doc, EncodeOptions{Format: FormatBinary})
 }
 
 // AppendText appends text VDF output to destination byte slice.

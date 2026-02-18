@@ -97,13 +97,26 @@ func TestParseStringStrictRejectsDuplicates(t *testing.T) {
 func TestParseFileFixture(t *testing.T) {
 	t.Parallel()
 
-	doc, err := ParseFile(filepath.Join("testdata", "valid.vdf"))
+	doc, err := ParseTextFile(filepath.Join("testdata", "valid.vdf"))
 	if err != nil {
-		t.Fatalf("ParseFile() returned error: %v", err)
+		t.Fatalf("ParseTextFile() returned error: %v", err)
 	}
 
 	if len(doc.Roots) != 1 {
 		t.Fatalf("root count = %d, want 1", len(doc.Roots))
+	}
+}
+
+func TestParseFileDefaultFormat(t *testing.T) {
+	t.Parallel()
+
+	doc, err := ParseFile(filepath.Join("testdata", "valid.vdf"))
+	if err != nil {
+		t.Fatalf("ParseFile(default) returned error: %v", err)
+	}
+
+	if doc.Format != FormatText {
+		t.Fatalf("default ParseFile format = %v, want %v", doc.Format, FormatText)
 	}
 }
 
