@@ -7,6 +7,14 @@ keeps an explicit AST (`Document` and `Node`) as the canonical model,
 preserves node order and duplicate keys,
 and includes low allocation byte slice encode paths.
 
+Full API reference: <https://pkg.go.dev/github.com/woozymasta/vdf>
+
+## Install
+
+```shell
+go get github.com/woozymasta/vdf
+```
+
 ## Reading VDF
 
 Use `ParseString`, `ParseBytes`, or `NewDecoder` depending on your input source.
