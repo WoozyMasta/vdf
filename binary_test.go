@@ -2,6 +2,7 @@ package vdf
 
 import (
 	"bytes"
+	"errors"
 	"path/filepath"
 	"testing"
 )
@@ -102,6 +103,40 @@ func TestDeterministicBinaryEncoding(t *testing.T) {
 
 	if !bytes.Equal(first, second) {
 		t.Fatalf("deterministic binary output differs")
+	}
+}
+
+func TestBinaryStringLengthLimits(t *testing.T) {
+	t.Parallel()
+
+	doc := NewDocumentWithFormat(FormatBinary)
+	root := NewObjectNode("root")
+	root.Add(NewStringNode("longkey_that_exceeds_limit", "v"))
+	doc.AddRoot(root)
+
+	payload, err := AppendBinary(nil, doc, EncodeOptions{Format: FormatBinary})
+	if err != nil {
+		t.Fatalf("AppendBinary() returned error: %v", err)
+	}
+
+	_, err = ParseBytes(payload, DecodeOptions{Format: FormatBinary, MaxKeyBytes: 3})
+	if !errors.Is(err, ErrKeyTooLong) {
+		t.Fatalf("MaxKeyBytes: error = %v, want ErrKeyTooLong", err)
+	}
+
+	doc2 := NewDocumentWithFormat(FormatBinary)
+	root2 := NewObjectNode("r")
+	root2.Add(NewStringNode("k", "longvalue_that_exceeds_limit"))
+	doc2.AddRoot(root2)
+
+	payload2, err := AppendBinary(nil, doc2, EncodeOptions{Format: FormatBinary})
+	if err != nil {
+		t.Fatalf("AppendBinary() returned error: %v", err)
+	}
+
+	_, err = ParseBytes(payload2, DecodeOptions{Format: FormatBinary, MaxValueBytes: 3})
+	if !errors.Is(err, ErrValueTooLong) {
+		t.Fatalf("MaxValueBytes: error = %v, want ErrValueTooLong", err)
 	}
 }
 

@@ -14,29 +14,44 @@ import (
 func (e *Encoder) startTextObject(key string) error {
 	indent := strings.Repeat(e.opts.Indent, e.manualDepth)
 	if e.opts.Compact {
-		_, err := fmt.Fprintf(e.w, "\"%s\" { ", escapeString(key))
+		if err := writeEscaped(e.w, key); err != nil {
+			return err
+		}
+		_, err := io.WriteString(e.w, " { ")
 		e.manualDepth++
 		return err
 	}
 
-	_, err := fmt.Fprintf(e.w, "%s\"%s\"\n%s{\n", indent, escapeString(key), indent)
-	if err != nil {
+	if _, err := io.WriteString(e.w, indent); err != nil {
 		return err
 	}
-
+	if err := writeEscaped(e.w, key); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(e.w, "\n"); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(e.w, indent); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(e.w, "{\n"); err != nil {
+		return err
+	}
 	e.manualDepth++
 	return nil
 }
 
 // endTextObject writes object footer in manual text encoding mode.
 func (e *Encoder) endTextObject() error {
-	indent := strings.Repeat(e.opts.Indent, e.manualDepth)
 	if e.opts.Compact {
-		_, err := fmt.Fprint(e.w, "} ")
+		_, err := io.WriteString(e.w, "} ")
 		return err
 	}
 
-	_, err := fmt.Fprintf(e.w, "%s}\n", indent)
+	if _, err := io.WriteString(e.w, strings.Repeat(e.opts.Indent, e.manualDepth)); err != nil {
+		return err
+	}
+	_, err := io.WriteString(e.w, "}\n")
 	return err
 }
 
@@ -44,11 +59,32 @@ func (e *Encoder) endTextObject() error {
 func (e *Encoder) writeTextLeaf(key, value string) error {
 	indent := strings.Repeat(e.opts.Indent, e.manualDepth)
 	if e.opts.Compact {
-		_, err := fmt.Fprintf(e.w, "\"%s\" \"%s\" ", escapeString(key), escapeString(value))
+		if err := writeEscaped(e.w, key); err != nil {
+			return err
+		}
+		if _, err := io.WriteString(e.w, " "); err != nil {
+			return err
+		}
+		if err := writeEscaped(e.w, value); err != nil {
+			return err
+		}
+		_, err := io.WriteString(e.w, " ")
 		return err
 	}
 
-	_, err := fmt.Fprintf(e.w, "%s\"%s\"\t\t\"%s\"\n", indent, escapeString(key), escapeString(value))
+	if _, err := io.WriteString(e.w, indent); err != nil {
+		return err
+	}
+	if err := writeEscaped(e.w, key); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(e.w, "\t\t"); err != nil {
+		return err
+	}
+	if err := writeEscaped(e.w, value); err != nil {
+		return err
+	}
+	_, err := io.WriteString(e.w, "\n")
 	return err
 }
 
@@ -57,7 +93,7 @@ func encodeTextDocument(w io.Writer, doc *Document, opts EncodeOptions) error {
 	roots := orderedNodes(doc.Roots, opts.Deterministic)
 
 	for i, root := range roots {
-		if err := encodeTextNode(w, root, opts, 0); err != nil {
+		if err := encodeTextNode(w, root, opts, ""); err != nil {
 			return err
 		}
 
@@ -72,20 +108,22 @@ func encodeTextDocument(w io.Writer, doc *Document, opts EncodeOptions) error {
 }
 
 // encodeTextNode writes one AST node in text VDF format.
-func encodeTextNode(w io.Writer, node *Node, opts EncodeOptions, depth int) error {
-	indent := strings.Repeat(opts.Indent, depth)
-
+// indent is the current indentation prefix (accumulated by callers).
+func encodeTextNode(w io.Writer, node *Node, opts EncodeOptions, indent string) error {
 	switch node.Kind {
 	case NodeObject:
 		if opts.Compact {
-			if _, err := fmt.Fprintf(w, "\"%s\" { ", escapeString(node.Key)); err != nil {
+			if err := writeEscaped(w, node.Key); err != nil {
+				return err
+			}
+			if _, err := io.WriteString(w, " { "); err != nil {
 				return err
 			}
 
-			// Reuse the same traversal ordering policy as document-level encode.
 			children := orderedNodes(node.Children, opts.Deterministic)
+			childIndent := indent + opts.Indent
 			for _, child := range children {
-				if err := encodeTextNode(w, child, opts, depth+1); err != nil {
+				if err := encodeTextNode(w, child, opts, childIndent); err != nil {
 					return err
 				}
 			}
@@ -94,20 +132,36 @@ func encodeTextNode(w io.Writer, node *Node, opts EncodeOptions, depth int) erro
 			return err
 		}
 
-		if _, err := fmt.Fprintf(w, "%s\"%s\"\n%s{\n", indent, escapeString(node.Key), indent); err != nil {
+		if _, err := io.WriteString(w, indent); err != nil {
+			return err
+		}
+		if err := writeEscaped(w, node.Key); err != nil {
+			return err
+		}
+		if _, err := io.WriteString(w, "\n"); err != nil {
+			return err
+		}
+		if _, err := io.WriteString(w, indent); err != nil {
+			return err
+		}
+		if _, err := io.WriteString(w, "{\n"); err != nil {
 			return err
 		}
 
-		// Keep ordering behavior consistent across compact and pretty branches.
 		children := orderedNodes(node.Children, opts.Deterministic)
+		childIndent := indent + opts.Indent
 		for _, child := range children {
-			if err := encodeTextNode(w, child, opts, depth+1); err != nil {
+			if err := encodeTextNode(w, child, opts, childIndent); err != nil {
 				return err
 			}
 		}
 
-		_, err := fmt.Fprintf(w, "%s}\n", indent)
+		if _, err := io.WriteString(w, indent); err != nil {
+			return err
+		}
+		_, err := io.WriteString(w, "}\n")
 		return err
+
 	case NodeString, NodeUint32:
 		value, err := textValueForNode(node)
 		if err != nil {
@@ -115,42 +169,81 @@ func encodeTextNode(w io.Writer, node *Node, opts EncodeOptions, depth int) erro
 		}
 
 		if opts.Compact {
-			_, err := fmt.Fprintf(w, "\"%s\" \"%s\" ", escapeString(node.Key), escapeString(value))
+			if err := writeEscaped(w, node.Key); err != nil {
+				return err
+			}
+			if _, err := io.WriteString(w, " "); err != nil {
+				return err
+			}
+			if err := writeEscaped(w, value); err != nil {
+				return err
+			}
+			_, err := io.WriteString(w, " ")
 			return err
 		}
 
-		_, err = fmt.Fprintf(w, "%s\"%s\"\t\t\"%s\"\n", indent, escapeString(node.Key), escapeString(value))
+		if _, err := io.WriteString(w, indent); err != nil {
+			return err
+		}
+		if err := writeEscaped(w, node.Key); err != nil {
+			return err
+		}
+		if _, err := io.WriteString(w, "\t\t"); err != nil {
+			return err
+		}
+		if err := writeEscaped(w, value); err != nil {
+			return err
+		}
+		_, err = io.WriteString(w, "\n")
 		return err
+
 	default:
 		return fmt.Errorf("%w: unsupported node kind %d", ErrInvalidNodeState, node.Kind)
 	}
 }
 
-// escapeString escapes special runes for text VDF output.
-func escapeString(value string) string {
-	if !strings.ContainsAny(value, "\\\"\n\t\r") {
-		return value
+// writeEscaped writes a quoted, VDF-escaped string directly to w.
+// For strings with no special characters no intermediate string is allocated.
+func writeEscaped(w io.Writer, s string) error {
+	if _, err := io.WriteString(w, `"`); err != nil {
+		return err
 	}
 
-	var sb strings.Builder
-	sb.Grow(len(value) + 8)
-
-	for _, r := range value {
-		switch r {
+	start := 0
+	for i := 0; i < len(s); i++ {
+		var esc string
+		switch s[i] {
 		case '\\':
-			sb.WriteString("\\\\")
+			esc = `\\`
 		case '"':
-			sb.WriteString("\\\"")
+			esc = `\"`
 		case '\n':
-			sb.WriteString("\\n")
+			esc = `\n`
 		case '\t':
-			sb.WriteString("\\t")
+			esc = `\t`
 		case '\r':
-			sb.WriteString("\\r")
+			esc = `\r`
 		default:
-			sb.WriteRune(r)
+			continue
+		}
+
+		if i > start {
+			if _, err := io.WriteString(w, s[start:i]); err != nil {
+				return err
+			}
+		}
+		if _, err := io.WriteString(w, esc); err != nil {
+			return err
+		}
+		start = i + 1
+	}
+
+	if start < len(s) {
+		if _, err := io.WriteString(w, s[start:]); err != nil {
+			return err
 		}
 	}
 
-	return sb.String()
+	_, err := io.WriteString(w, `"`)
+	return err
 }

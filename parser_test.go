@@ -23,6 +23,10 @@ func TestParseFixtures(t *testing.T) {
 		{name: "corrupted quote", fixture: "corrupted.vdf", wantErr: ErrUnexpectedEOFInQuotedString},
 		{name: "missing object braces", fixture: "no_brace.vdf", wantErr: ErrExpectedValueOrObject},
 		{name: "broken comment", fixture: "broken_comment.vdf", wantErr: ErrExpectedValueOrObject},
+		{name: "steam manifest", fixture: "steam_manifest.vdf", wantRoots: 2},
+		{name: "long value", fixture: "long_value.vdf", wantRoots: 1},
+		{name: "crash brackets", fixture: "crash_brackets.vdf", wantErr: ErrUnexpectedEOFInQuotedString},
+		{name: "crash escapes", fixture: "crash_escapes.vdf", wantErr: ErrExpectedValueOrObject},
 	}
 
 	for _, tt := range tests {
@@ -165,4 +169,207 @@ func TestDecoderNextEvent(t *testing.T) {
 			t.Fatalf("event[%d] = %v, want %v", i, types[i], want[i])
 		}
 	}
+}
+
+func TestStringLengthLimits(t *testing.T) {
+	t.Parallel()
+
+	longKey := `"` + string(make([]byte, 100)) + `" "v"`
+	longVal := `"k" "` + string(make([]byte, 100)) + `"`
+
+	_, err := ParseBytes([]byte(longKey), DecodeOptions{Format: FormatText, MaxKeyBytes: 10})
+	if !errors.Is(err, ErrKeyTooLong) {
+		t.Fatalf("MaxKeyBytes: error = %v, want ErrKeyTooLong", err)
+	}
+
+	_, err = ParseBytes([]byte(longVal), DecodeOptions{Format: FormatText, MaxValueBytes: 10})
+	if !errors.Is(err, ErrValueTooLong) {
+		t.Fatalf("MaxValueBytes: error = %v, want ErrValueTooLong", err)
+	}
+
+	_, err = ParseBytes([]byte(longKey), DecodeOptions{Format: FormatText, MaxStringBytes: 10})
+	if !errors.Is(err, ErrKeyTooLong) && !errors.Is(err, ErrValueTooLong) {
+		t.Fatalf("MaxStringBytes(key): error = %v, want ErrKeyTooLong or ErrValueTooLong", err)
+	}
+
+	_, err = ParseBytes([]byte(longVal), DecodeOptions{Format: FormatText, MaxStringBytes: 10})
+	if !errors.Is(err, ErrKeyTooLong) && !errors.Is(err, ErrValueTooLong) {
+		t.Fatalf("MaxStringBytes(val): error = %v, want ErrKeyTooLong or ErrValueTooLong", err)
+	}
+
+	_, err = ParseBytes([]byte(longVal), DecodeOptions{Format: FormatText})
+	if err != nil {
+		t.Fatalf("no limits: unexpected error = %v", err)
+	}
+}
+
+func TestDecoderWalkEvents(t *testing.T) {
+	t.Parallel()
+
+	decoder := NewDecoder(strings.NewReader(readFixtureString(t, "duplicates.vdf")), DecodeOptions{Format: FormatText})
+
+	types := make([]EventType, 0)
+	for {
+		event, err := decoder.WalkEvents()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+
+		if err != nil {
+			t.Fatalf("WalkEvents() returned error: %v", err)
+		}
+
+		types = append(types, event.Type)
+	}
+
+	want := []EventType{EventDocumentStart, EventObjectStart, EventString, EventString, EventObjectEnd, EventDocumentEnd}
+	if len(types) != len(want) {
+		t.Fatalf("event count = %d, want %d", len(types), len(want))
+	}
+
+	for i := range want {
+		if types[i] != want[i] {
+			t.Fatalf("event[%d] = %v, want %v", i, types[i], want[i])
+		}
+	}
+}
+
+func TestNextEventBinaryStreaming(t *testing.T) {
+	t.Parallel()
+
+	doc, err := ParseString(`"root" { "k1" "v1" "k2" "v2" }`)
+	if err != nil {
+		t.Fatalf("ParseString: %v", err)
+	}
+
+	bin, err := AppendBinary(nil, doc, EncodeOptions{Format: FormatBinary})
+	if err != nil {
+		t.Fatalf("AppendBinary: %v", err)
+	}
+
+	dec := NewDecoder(strings.NewReader(string(bin)), DecodeOptions{Format: FormatBinary})
+	var types []EventType
+	for {
+		ev, err := dec.NextEvent()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("NextEvent: %v", err)
+		}
+		types = append(types, ev.Type)
+	}
+
+	want := []EventType{EventDocumentStart, EventObjectStart, EventString, EventString, EventObjectEnd, EventDocumentEnd}
+	if len(types) != len(want) {
+		t.Fatalf("event count = %d, want %d: %v", len(types), len(want), types)
+	}
+	for i, w := range want {
+		if types[i] != w {
+			t.Fatalf("event[%d] = %v, want %v", i, types[i], w)
+		}
+	}
+}
+
+func TestNextEventAutoDetect(t *testing.T) {
+	t.Parallel()
+
+	dec := NewDecoder(strings.NewReader(`"cfg" { "timeout" "5" }`), DecodeOptions{Format: FormatAuto})
+
+	var types []EventType
+	for {
+		ev, err := dec.NextEvent()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("NextEvent(auto): %v", err)
+		}
+		types = append(types, ev.Type)
+	}
+
+	want := []EventType{EventDocumentStart, EventObjectStart, EventString, EventObjectEnd, EventDocumentEnd}
+	if len(types) != len(want) {
+		t.Fatalf("event count = %d, want %d: %v", len(types), len(want), types)
+	}
+}
+
+func TestNextEventStringValues(t *testing.T) {
+	t.Parallel()
+
+	dec := NewDecoder(strings.NewReader(`"root" { "name" "hello" }`), DecodeOptions{Format: FormatText})
+	for {
+		ev, err := dec.NextEvent()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("NextEvent: %v", err)
+		}
+		if ev.Type == EventString {
+			if ev.Key != "name" {
+				t.Fatalf("key = %q, want %q", ev.Key, "name")
+			}
+			if ev.StringValue == nil || *ev.StringValue != "hello" {
+				t.Fatalf("StringValue = %v, want \"hello\"", ev.StringValue)
+			}
+		}
+	}
+}
+
+func TestNextEventDepths(t *testing.T) {
+	t.Parallel()
+
+	dec := NewDecoder(strings.NewReader(`"root" { "k" "v" }`), DecodeOptions{Format: FormatText})
+
+	wantDepths := map[EventType]int{
+		EventDocumentStart: 0,
+		EventObjectStart:   1,
+		EventString:        2,
+		EventObjectEnd:     1,
+		EventDocumentEnd:   0,
+	}
+
+	for {
+		ev, err := dec.NextEvent()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("NextEvent: %v", err)
+		}
+		if want, ok := wantDepths[ev.Type]; ok {
+			if ev.Depth != want {
+				t.Errorf("event %v: Depth = %d, want %d", ev.Type, ev.Depth, want)
+			}
+		}
+	}
+}
+
+func TestNextEventWalkEventsMutualExclusion(t *testing.T) {
+	t.Parallel()
+
+	t.Run("NextAfterWalk", func(t *testing.T) {
+		t.Parallel()
+		dec := NewDecoder(strings.NewReader(`"r" { "k" "v" }`), DecodeOptions{Format: FormatText})
+		if _, err := dec.WalkEvents(); err != nil {
+			t.Fatalf("WalkEvents: %v", err)
+		}
+		_, err := dec.NextEvent()
+		if !errors.Is(err, ErrInvalidNodeState) {
+			t.Fatalf("NextEvent after WalkEvents: error = %v, want ErrInvalidNodeState", err)
+		}
+	})
+
+	t.Run("WalkAfterNext", func(t *testing.T) {
+		t.Parallel()
+		dec := NewDecoder(strings.NewReader(`"r" { "k" "v" }`), DecodeOptions{Format: FormatText})
+		if _, err := dec.NextEvent(); err != nil {
+			t.Fatalf("NextEvent: %v", err)
+		}
+		_, err := dec.WalkEvents()
+		if !errors.Is(err, ErrInvalidNodeState) {
+			t.Fatalf("WalkEvents after NextEvent: error = %v, want ErrInvalidNodeState", err)
+		}
+	})
 }

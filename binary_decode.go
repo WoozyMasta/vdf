@@ -96,7 +96,7 @@ func (d *binaryDecoder) decodeEntry(typeByte byte, depth int) (*Node, error) {
 		return nil, err
 	}
 
-	key, err := d.readNullTerminatedString()
+	key, err := d.readKey()
 	if err != nil {
 		return nil, err
 	}
@@ -135,8 +135,9 @@ func (d *binaryDecoder) decodeEntry(typeByte byte, depth int) (*Node, error) {
 
 			node.Add(child)
 		}
+
 	case binaryTypeString:
-		value, err := d.readNullTerminatedString()
+		value, err := d.readValue()
 		if err != nil {
 			return nil, err
 		}
@@ -147,6 +148,7 @@ func (d *binaryDecoder) decodeEntry(typeByte byte, depth int) (*Node, error) {
 		}
 
 		return node, nil
+
 	case binaryTypeNumber:
 		value, err := d.readUint32()
 		if err != nil {
@@ -159,6 +161,7 @@ func (d *binaryDecoder) decodeEntry(typeByte byte, depth int) (*Node, error) {
 		}
 
 		return node, nil
+
 	default:
 		return nil, fmt.Errorf("%w: 0x%02x", ErrUnrecognizedType, typeByte)
 	}
@@ -172,6 +175,34 @@ func (d *binaryDecoder) readTypeByte() (byte, error) {
 	}
 
 	return b, nil
+}
+
+// readKey reads a null-terminated key string and applies key length limits.
+func (d *binaryDecoder) readKey() (string, error) {
+	s, err := d.readNullTerminatedString()
+	if err != nil {
+		return "", err
+	}
+
+	if limit := effectiveKeyLimit(d.opts); limit > 0 && len(s) > limit {
+		return "", fmt.Errorf("%w: len=%d limit=%d", ErrKeyTooLong, len(s), limit)
+	}
+
+	return s, nil
+}
+
+// readValue reads a null-terminated string value and applies value length limits.
+func (d *binaryDecoder) readValue() (string, error) {
+	s, err := d.readNullTerminatedString()
+	if err != nil {
+		return "", err
+	}
+
+	if limit := effectiveValueLimit(d.opts); limit > 0 && len(s) > limit {
+		return "", fmt.Errorf("%w: len=%d limit=%d", ErrValueTooLong, len(s), limit)
+	}
+
+	return s, nil
 }
 
 // readNullTerminatedString reads one null-terminated string.

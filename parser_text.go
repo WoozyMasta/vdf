@@ -13,15 +13,15 @@ import (
 type textParser struct {
 	lexer     *textLexer    // Lexer for the input.
 	peeked    textToken     // Peeked token value.
-	hasPeeked bool          // Whether peek token is set.
 	opts      DecodeOptions // Decode options.
 	nodeCount int           // Number of nodes parsed.
+	hasPeeked bool          // Whether peek token is set.
 }
 
 // parseTextDocument parses one full text VDF stream.
 func parseTextDocument(r io.Reader, opts DecodeOptions) (*Document, error) {
 	parser := &textParser{
-		lexer: newTextLexer(r),
+		lexer: newTextLexer(r, opts),
 		opts:  opts,
 	}
 
@@ -65,6 +65,10 @@ func (p *textParser) parseNode(depth int) (*Node, error) {
 		return nil, fmt.Errorf("%w at line %d, col %d", ErrExpectedStringKey, keyTok.line, keyTok.col)
 	}
 
+	if limit := effectiveKeyLimit(p.opts); limit > 0 && len(keyTok.value) > limit {
+		return nil, fmt.Errorf("%w: key %q len=%d limit=%d", ErrKeyTooLong, keyTok.value, len(keyTok.value), limit)
+	}
+
 	nextTok, err := p.peekToken()
 	if err != nil {
 		return nil, err
@@ -77,14 +81,20 @@ func (p *textParser) parseNode(depth int) (*Node, error) {
 			return nil, err
 		}
 
+		if limit := effectiveValueLimit(p.opts); limit > 0 && len(valueTok.value) > limit {
+			return nil, fmt.Errorf("%w: key %q len=%d limit=%d", ErrValueTooLong, keyTok.value, len(valueTok.value), limit)
+		}
+
 		node := NewStringNode(keyTok.value, valueTok.value)
 		if err := p.incrementNodeCount(); err != nil {
 			return nil, err
 		}
 
 		return node, nil
+
 	case textTokenLBrace:
 		return p.parseObject(keyTok.value, depth)
+
 	default:
 		return nil, fmt.Errorf("%w at line %d, col %d", ErrExpectedValueOrObject, nextTok.line, nextTok.col)
 	}

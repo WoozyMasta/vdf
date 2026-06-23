@@ -41,4 +41,12 @@ var (
 	ErrExpectedObjectStart = errors.New("expected '{'")
 	// ErrUnexpectedEOFInObject indicates that the parser reached EOF before closing an object.
 	ErrUnexpectedEOFInObject = errors.New("unexpected EOF, expected '}'")
+	// ErrKeyTooLong indicates that a parsed key exceeded the configured byte limit.
+	ErrKeyTooLong = errors.New("key exceeds maximum byte length")
+	// ErrValueTooLong indicates that a parsed string value exceeded the configured byte limit.
+	ErrValueTooLong = errors.New("string value exceeds maximum byte length")
+	// ErrReflectUnsupportedType indicates that a Go type cannot be mapped to a VDF node.
+	ErrReflectUnsupportedType = errors.New("unsupported Go type for VDF reflection")
+	// ErrReflectFieldMismatch indicates a type mismatch or missing key during Unmarshal.
+	ErrReflectFieldMismatch = errors.New("VDF field mismatch during unmarshal")
 )

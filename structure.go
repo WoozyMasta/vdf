@@ -76,14 +76,21 @@ const (
 
 // DecodeOptions controls decoder behavior.
 type DecodeOptions struct {
-	// Format selects expected input format.
-	Format Format
-	// Strict enables stricter validation paths where available.
-	Strict bool
 	// MaxDepth limits nested object depth (0 means unlimited).
 	MaxDepth int
 	// MaxNodes limits total parsed nodes (0 means unlimited).
 	MaxNodes int
+	// MaxKeyBytes limits the byte length of any parsed key (0 means unlimited).
+	MaxKeyBytes int
+	// MaxValueBytes limits the byte length of any parsed string value (0 means unlimited).
+	MaxValueBytes int
+	// MaxStringBytes is a convenience ceiling applied to both keys and values
+	// when their specific limit is zero (0 means unlimited).
+	MaxStringBytes int
+	// Format selects expected input format.
+	Format Format
+	// Strict enables stricter validation paths where available.
+	Strict bool
 }
 
 // EncodeOptions controls encoder behavior.

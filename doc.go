@@ -28,9 +28,22 @@ For byte slices and strings use ParseBytes and ParseString.
 For file paths use ParseFile with optional DecodeOptions,
 or ParseTextFile/ParseAutoFile.
 
-NextEvent provides traversal events over the decoded document:
+WalkEvents decodes the full document into an AST on the first call,
+then returns DFS traversal events on subsequent calls.
+Use it when you need the document available after iteration:
 
-	event, err := dec.NextEvent()
+	event, err := dec.WalkEvents()
+
+NextEvent is a true streaming decoder:
+it reads and yields events one at a time without building an AST,
+making it suitable for large inputs.
+WalkEvents and NextEvent are mutually exclusive on a single Decoder instance.
+
+# Security limits
+
+DecodeOptions.MaxDepth and MaxNodes bound recursion and node count.
+MaxKeyBytes, MaxValueBytes, and MaxStringBytes bound string lengths
+for keys and values respectively. All limits use 0 to mean unlimited.
 
 # Encode API
 
@@ -46,8 +59,34 @@ or WriteTextFile/WriteBinaryFile.
 
 # Fast paths
 
-AppendText and AppendBinary append encoded output directly into destination
-byte slices to reduce allocations on hot paths.
+AppendText and AppendBinary append encoded output directly
+into destination byte slices to reduce allocations on hot paths.
+
+# Builder
+
+NewBuilder provides a fluent, ordered API
+for constructing Documents without manual AST manipulation:
+
+	doc, err := vdf.NewBuilder("root").
+		Set("key", "value").
+		Object("child", func(b *vdf.Builder) { b.SetUint32("n", 1) }).
+		Document()
+
+# Reflection API
+
+Marshal and Unmarshal convert between Go structs
+and VDF Documents using struct field tags of the form vdf:"name,option":
+
+	type S struct {
+		Name string `vdf:"name"`
+		Port uint32 `vdf:"port"`
+	}
+	doc, _ := vdf.Marshal("Server", S{Name: "x", Port: 2302})
+	var s S
+	_ = vdf.Unmarshal(doc, "Server", &s)
+
+Supported options: omitempty, inline, repeated, indexed.
+Fields implementing encoding.TextMarshaler/TextUnmarshaler are handled automatically.
 
 # Validation
 

@@ -59,6 +59,7 @@ func encodeBinaryNode(w io.Writer, node *Node, opts EncodeOptions) error {
 		}
 
 		return nil
+
 	case NodeString:
 		if err := writeBinaryByte(w, binaryTypeString); err != nil {
 			return err
@@ -73,6 +74,7 @@ func encodeBinaryNode(w io.Writer, node *Node, opts EncodeOptions) error {
 		}
 
 		return writeNullTerminatedString(w, *node.StringValue)
+
 	case NodeUint32:
 		if err := writeBinaryByte(w, binaryTypeNumber); err != nil {
 			return err
@@ -90,6 +92,7 @@ func encodeBinaryNode(w io.Writer, node *Node, opts EncodeOptions) error {
 		binary.LittleEndian.PutUint32(raw[:], *node.Uint32Value)
 		_, err := w.Write(raw[:])
 		return err
+
 	default:
 		return fmt.Errorf("%w: unknown node kind %d", ErrInvalidNodeState, node.Kind)
 	}

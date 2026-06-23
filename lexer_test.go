@@ -8,7 +8,7 @@ import (
 func TestTextLexerTracksLineAndColumn(t *testing.T) {
 	t.Parallel()
 
-	lexer := newTextLexer(strings.NewReader("\"a\"\n\"b\""))
+	lexer := newTextLexer(strings.NewReader("\"a\"\n\"b\""), DecodeOptions{})
 
 	first, err := lexer.nextToken()
 	if err != nil {

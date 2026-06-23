@@ -53,8 +53,10 @@ func (e *Encoder) EncodeDocument(doc *Document) error {
 	switch format {
 	case FormatText:
 		return encodeTextDocument(e.w, doc, e.opts)
+
 	case FormatBinary:
 		return encodeBinaryDocument(e.w, doc, e.opts)
+
 	default:
 		return fmt.Errorf("%w: %d", ErrInvalidFormat, format)
 	}

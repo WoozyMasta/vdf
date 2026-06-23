@@ -1,31 +1,19 @@
 GO          ?= go
+BASH        ?= bash
 LINTER      ?= golangci-lint
 ALIGNER     ?= betteralign
+VULNCHECK   ?= govulncheck
 BENCHSTAT   ?= benchstat
 BENCH_COUNT ?= 6
 BENCH_REF   ?= bench_baseline.txt
+FUZZ_TIME   ?= 20s
 
-.PHONY: test test-race test-short bench bench-fast bench-reset verify vet check ci \
-	fmt fmt-check lint lint-fix align align-fix tidy tidy-check download \
-	tools tools-ci tool-golangci-lint tool-betteralign tool-benchstat \
-	release-notes
+.PHONY: check ci
 
-check: verify tidy fmt vet lint-fix align-fix test
-ci: download tools-ci verify tidy-check fmt-check vet lint align test
+check: verify tidy fmt vulncheck vet lint-fix align-fix test test-race fuzz
+ci: download tools-ci verify tidy-check fmt-check vulncheck vet lint align test
 
-fmt:
-	gofmt -w .
-
-fmt-check:
-	@files=$$(gofmt -l .); \
-	if [ -n "$$files" ]; then \
-		echo "$$files" 1>&2; \
-		echo "gofmt: files need formatting" 1>&2; \
-		exit 1; \
-	fi
-
-vet:
-	$(GO) vet ./...
+.PHONY: test test-race
 
 test:
 	$(GO) test ./...
@@ -33,8 +21,7 @@ test:
 test-race:
 	$(GO) test -race ./...
 
-test-short:
-	$(GO) test -short ./...
+.PHONY: bench bench-fast bench-reset
 
 bench:
 	@tmp=$$(mktemp); \
@@ -52,8 +39,28 @@ bench-fast:
 bench-reset:
 	rm -f "$(BENCH_REF)"
 
+.PHONY: fuzz
+
+fuzz:
+	$(GO) test -run='^$$' -fuzz='^FuzzTextParser$$' -fuzztime=$(FUZZ_TIME) .
+	$(GO) test -run='^$$' -fuzz='^FuzzBinaryParser$$' -fuzztime=$(FUZZ_TIME) .
+	$(GO) test -run='^$$' -fuzz='^FuzzWriterRoundtrip$$' -fuzztime=$(FUZZ_TIME) .
+	$(GO) test -run='^$$' -fuzz='^FuzzParseAuto$$' -fuzztime=$(FUZZ_TIME) .
+	$(GO) test -run='^$$' -fuzz='^FuzzTextParserLimits$$' -fuzztime=$(FUZZ_TIME) .
+
+.PHONY: download verify vet tidy tidy-check fmt fmt-check vulncheck lint lint-fix align align-fix
+
+download:
+	$(GO) mod download
+
 verify:
 	$(GO) mod verify
+
+vet:
+	$(GO) vet ./...
+
+tidy:
+	$(GO) mod tidy
 
 tidy-check:
 	@$(GO) mod tidy
@@ -62,11 +69,19 @@ tidy-check:
 		exit 1; \
 	)
 
-tidy:
-	$(GO) mod tidy
+fmt:
+	gofmt -w .
 
-download:
-	$(GO) mod download
+fmt-check:
+	@files="$$(gofmt -l .)"; \
+	if [ -n "$$files" ]; then \
+		echo "$$files"; \
+		echo "gofmt: files need formatting"; \
+		exit 1; \
+	fi
+
+vulncheck:
+	$(VULNCHECK) ./...
 
 lint:
 	$(LINTER) run ./...
@@ -81,8 +96,10 @@ align-fix:
 	-$(ALIGNER) -apply ./...
 	$(ALIGNER) ./...
 
-tools: tool-golangci-lint tool-betteralign tool-benchstat
-tools-ci: tool-golangci-lint tool-betteralign
+.PHONY: tools tools-ci tool-golangci-lint tool-betteralign tool-benchstat
+
+tools: tool-golangci-lint tool-betteralign tool-govulncheck tool-benchstat
+tools-ci: tool-golangci-lint tool-govulncheck tool-betteralign
 
 tool-golangci-lint:
 	$(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
@@ -90,8 +107,13 @@ tool-golangci-lint:
 tool-betteralign:
 	$(GO) install github.com/dkorunic/betteralign/cmd/betteralign@latest
 
+tool-govulncheck:
+	$(GO) install golang.org/x/vuln/cmd/govulncheck@latest
+
 tool-benchstat:
 	$(GO) install golang.org/x/perf/cmd/benchstat@latest
+
+.PHONY: release-notes
 
 release-notes:
 	@awk '\

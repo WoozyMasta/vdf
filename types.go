@@ -5,8 +5,10 @@
 package vdf
 
 import (
+	"cmp"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 )
 
@@ -157,6 +159,37 @@ func (d *Document) ToMapLossy() Map {
 	}
 
 	return out
+}
+
+// FromMapSorted builds a document with one object root from a map with keys sorted.
+// Unlike FromMap, key iteration order is deterministic (lexicographic).
+func FromMapSorted(rootKey string, m Map) (*Document, error) {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+
+	slices.SortFunc(keys, cmp.Compare)
+
+	doc := NewDocumentWithFormat(FormatAuto)
+	root := NewObjectNode(rootKey)
+
+	for _, key := range keys {
+		node, err := mapValueToNode(key, m[key])
+		if err != nil {
+			return nil, err
+		}
+
+		root.Children = append(root.Children, node)
+	}
+
+	doc.AddRoot(root)
+
+	if err := doc.Validate(); err != nil {
+		return nil, err
+	}
+
+	return doc, nil
 }
 
 // FromMap builds a document with one object root from a map.

@@ -29,9 +29,9 @@ const (
 // textToken stores one lexical token with source position.
 type textToken struct {
 	value string        // Value of the token.
+	kind  textTokenKind // Type of the token.
 	line  int           // Line number of the token.
 	col   int           // Column number of the token.
-	kind  textTokenKind // Type of the token.
 }
 
 // runeReader is a minimal rune-scanning reader contract.
@@ -41,15 +41,16 @@ type runeReader interface {
 
 // textLexer tokenizes text VDF input.
 type textLexer struct {
-	reader    runeReader // Reader for the input.
-	peeked    rune       // Peeked rune value.
-	hasPeeked bool       // Whether peeked rune is set.
-	line      int        // Line number of the current position.
-	col       int        // Column number of the current position.
+	reader    runeReader    // Reader for the input.
+	opts      DecodeOptions // Decode options (used for MaxStringBytes ceiling).
+	line      int           // Line number of the current position.
+	col       int           // Column number of the current position.
+	peeked    rune          // Peeked rune value.
+	hasPeeked bool          // Whether peeked rune is set.
 }
 
 // newTextLexer creates a text lexer.
-func newTextLexer(r io.Reader) *textLexer {
+func newTextLexer(r io.Reader, opts DecodeOptions) *textLexer {
 	reader, ok := r.(runeReader)
 	if !ok {
 		reader = bufio.NewReader(r)
@@ -59,6 +60,7 @@ func newTextLexer(r io.Reader) *textLexer {
 		reader: reader,
 		line:   1,
 		col:    0,
+		opts:   opts,
 	}
 }
 
@@ -104,6 +106,7 @@ func (l *textLexer) peekRune() (rune, error) {
 
 	l.peeked = r
 	l.hasPeeked = true
+
 	return r, nil
 }
 
@@ -165,7 +168,12 @@ func (l *textLexer) readQuotedString() (string, error) {
 		}
 
 		if r == '"' {
-			return sb.String(), nil
+			result := sb.String()
+			if limit := l.opts.MaxStringBytes; limit > 0 && len(result) > limit {
+				return "", fmt.Errorf("%w: len=%d limit=%d", ErrValueTooLong, len(result), limit)
+			}
+
+			return result, nil
 		}
 
 		if r == '\\' {
@@ -225,7 +233,12 @@ func (l *textLexer) readUnquotedString() (string, error) {
 		sb.WriteRune(r)
 	}
 
-	return sb.String(), nil
+	result := sb.String()
+	if limit := l.opts.MaxStringBytes; limit > 0 && len(result) > limit {
+		return "", fmt.Errorf("%w: len=%d limit=%d", ErrValueTooLong, len(result), limit)
+	}
+
+	return result, nil
 }
 
 // isWhitespace is an ASCII-fast whitespace check with Unicode fallback.
@@ -282,27 +295,27 @@ func (l *textLexer) nextToken() (textToken, error) {
 			if err != nil {
 				return textToken{}, err
 			}
-
 			return textToken{kind: textTokenString, value: "/" + rest, line: startLine, col: startCol}, nil
+
 		case '{':
 			if _, err := l.readRune(); err != nil {
 				return textToken{}, err
 			}
-
 			return textToken{kind: textTokenLBrace, value: "{", line: startLine, col: startCol}, nil
+
 		case '}':
 			if _, err := l.readRune(); err != nil {
 				return textToken{}, err
 			}
-
 			return textToken{kind: textTokenRBrace, value: "}", line: startLine, col: startCol}, nil
+
 		case '"':
 			value, err := l.readQuotedString()
 			if err != nil {
 				return textToken{}, err
 			}
-
 			return textToken{kind: textTokenString, value: value, line: startLine, col: startCol}, nil
+
 		default:
 			value, err := l.readUnquotedString()
 			if err != nil {
