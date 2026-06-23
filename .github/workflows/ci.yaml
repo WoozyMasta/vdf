@@ -17,5 +17,7 @@ jobs:
         with:
           go-version: '1.26'
 
+      - uses: rvben/rumdl@v0
+
       - name: Run CI
         run: make ci
