@@ -29,6 +29,35 @@ func TestTextLexerTracksLineAndColumn(t *testing.T) {
 	}
 }
 
+func TestLexerStringLimitEnforcedDuringRead(t *testing.T) {
+	t.Parallel()
+
+	const limit = 5
+
+	// Quoted string that never closes - without early enforcement
+	// the lexer would accumulate an unbounded amount of data before returning an error.
+	t.Run("quoted no closing quote", func(t *testing.T) {
+		t.Parallel()
+		input := `"` + strings.Repeat("A", limit+1)
+		l := newTextLexer(strings.NewReader(input), DecodeOptions{MaxStringBytes: limit})
+		_, err := l.nextToken()
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+
+	// Unquoted string with no whitespace delimiter.
+	t.Run("unquoted no delimiter", func(t *testing.T) {
+		t.Parallel()
+		input := strings.Repeat("B", limit+1)
+		l := newTextLexer(strings.NewReader(input), DecodeOptions{MaxStringBytes: limit})
+		_, err := l.nextToken()
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+}
+
 func TestParseStringErrorContainsPosition(t *testing.T) {
 	t.Parallel()
 

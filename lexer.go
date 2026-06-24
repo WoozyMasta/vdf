@@ -156,6 +156,7 @@ func (l *textLexer) readQuotedString() (string, error) {
 		return "", err
 	}
 
+	limit := l.opts.MaxStringBytes
 	var sb strings.Builder
 	for {
 		r, err := l.readRune()
@@ -168,12 +169,7 @@ func (l *textLexer) readQuotedString() (string, error) {
 		}
 
 		if r == '"' {
-			result := sb.String()
-			if limit := l.opts.MaxStringBytes; limit > 0 && len(result) > limit {
-				return "", fmt.Errorf("%w: len=%d limit=%d", ErrValueTooLong, len(result), limit)
-			}
-
-			return result, nil
+			return sb.String(), nil
 		}
 
 		if r == '\\' {
@@ -201,16 +197,19 @@ func (l *textLexer) readQuotedString() (string, error) {
 				sb.WriteRune('\\')
 				sb.WriteRune(next)
 			}
-
-			continue
+		} else {
+			sb.WriteRune(r)
 		}
 
-		sb.WriteRune(r)
+		if limit > 0 && sb.Len() > limit {
+			return "", fmt.Errorf("%w: len=%d limit=%d", ErrValueTooLong, sb.Len(), limit)
+		}
 	}
 }
 
 // readUnquotedString reads one unquoted string token.
 func (l *textLexer) readUnquotedString() (string, error) {
+	limit := l.opts.MaxStringBytes
 	var sb strings.Builder
 	for {
 		r, err := l.peekRune()
@@ -231,14 +230,13 @@ func (l *textLexer) readUnquotedString() (string, error) {
 		}
 
 		sb.WriteRune(r)
+
+		if limit > 0 && sb.Len() > limit {
+			return "", fmt.Errorf("%w: len=%d limit=%d", ErrValueTooLong, sb.Len(), limit)
+		}
 	}
 
-	result := sb.String()
-	if limit := l.opts.MaxStringBytes; limit > 0 && len(result) > limit {
-		return "", fmt.Errorf("%w: len=%d limit=%d", ErrValueTooLong, len(result), limit)
-	}
-
-	return result, nil
+	return sb.String(), nil
 }
 
 // isWhitespace is an ASCII-fast whitespace check with Unicode fallback.

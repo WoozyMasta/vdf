@@ -232,9 +232,11 @@ func (s *streamState) nextBinary() (Event, error) {
 	}
 }
 
-// binaryNullTerm reads one null-terminated string from the binary stream.
+// binaryNullTerm reads one null-terminated string from the binary stream,
+// stopping early if limit bytes are exceeded before the null terminator.
+// Pass limit=0 to disable the early limit check.
 // Reuses the shared buffer pool from binary_decode.go.
-func (s *streamState) binaryNullTerm() (string, error) {
+func (s *streamState) binaryNullTerm(limit int, limitErr error) (string, error) {
 	bufPtr := binaryStringBufferPool.Get().(*[]byte)
 	buf := (*bufPtr)[:0]
 
@@ -262,35 +264,21 @@ func (s *streamState) binaryNullTerm() (string, error) {
 		}
 
 		buf = append(buf, b)
+
+		if limit > 0 && len(buf) > limit {
+			return "", fmt.Errorf("%w: len=%d limit=%d", limitErr, len(buf), limit)
+		}
 	}
 }
 
 // binaryKey reads a null-terminated key string and enforces key length limits.
 func (s *streamState) binaryKey() (string, error) {
-	str, err := s.binaryNullTerm()
-	if err != nil {
-		return "", err
-	}
-
-	if limit := effectiveKeyLimit(s.opts); limit > 0 && len(str) > limit {
-		return "", fmt.Errorf("%w: len=%d limit=%d", ErrKeyTooLong, len(str), limit)
-	}
-
-	return str, nil
+	return s.binaryNullTerm(effectiveKeyLimit(s.opts), ErrKeyTooLong)
 }
 
 // binaryValue reads a null-terminated value string and enforces value length limits.
 func (s *streamState) binaryValue() (string, error) {
-	str, err := s.binaryNullTerm()
-	if err != nil {
-		return "", err
-	}
-
-	if limit := effectiveValueLimit(s.opts); limit > 0 && len(str) > limit {
-		return "", fmt.Errorf("%w: len=%d limit=%d", ErrValueTooLong, len(str), limit)
-	}
-
-	return str, nil
+	return s.binaryNullTerm(effectiveValueLimit(s.opts), ErrValueTooLong)
 }
 
 // postProcess applies MaxNodes and Strict duplicate-key checks to a successfully decoded event.

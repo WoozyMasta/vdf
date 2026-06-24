@@ -179,34 +179,18 @@ func (d *binaryDecoder) readTypeByte() (byte, error) {
 
 // readKey reads a null-terminated key string and applies key length limits.
 func (d *binaryDecoder) readKey() (string, error) {
-	s, err := d.readNullTerminatedString()
-	if err != nil {
-		return "", err
-	}
-
-	if limit := effectiveKeyLimit(d.opts); limit > 0 && len(s) > limit {
-		return "", fmt.Errorf("%w: len=%d limit=%d", ErrKeyTooLong, len(s), limit)
-	}
-
-	return s, nil
+	return d.readNullTerminatedString(effectiveKeyLimit(d.opts), ErrKeyTooLong)
 }
 
 // readValue reads a null-terminated string value and applies value length limits.
 func (d *binaryDecoder) readValue() (string, error) {
-	s, err := d.readNullTerminatedString()
-	if err != nil {
-		return "", err
-	}
-
-	if limit := effectiveValueLimit(d.opts); limit > 0 && len(s) > limit {
-		return "", fmt.Errorf("%w: len=%d limit=%d", ErrValueTooLong, len(s), limit)
-	}
-
-	return s, nil
+	return d.readNullTerminatedString(effectiveValueLimit(d.opts), ErrValueTooLong)
 }
 
-// readNullTerminatedString reads one null-terminated string.
-func (d *binaryDecoder) readNullTerminatedString() (string, error) {
+// readNullTerminatedString reads one null-terminated string,
+// stopping early if limit bytes are exceeded before the null terminator is reached.
+// Pass limit=0 to disable the early limit check.
+func (d *binaryDecoder) readNullTerminatedString(limit int, limitErr error) (string, error) {
 	bufPtr := binaryStringBufferPool.Get().(*[]byte)
 	buf := (*bufPtr)[:0]
 	defer func() {
@@ -233,6 +217,10 @@ func (d *binaryDecoder) readNullTerminatedString() (string, error) {
 		}
 
 		buf = append(buf, b)
+
+		if limit > 0 && len(buf) > limit {
+			return "", fmt.Errorf("%w: len=%d limit=%d", limitErr, len(buf), limit)
+		}
 	}
 }
 

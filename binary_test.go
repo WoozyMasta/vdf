@@ -140,6 +140,29 @@ func TestBinaryStringLengthLimits(t *testing.T) {
 	}
 }
 
+func TestBinaryStringLimitEnforcedDuringRead(t *testing.T) {
+	t.Parallel()
+
+	// Craft a binary payload
+	// MapStart + key "k\0" + String type + key "k\0" + a value that is limit+1 bytes long with NO null terminator.
+	// With early enforcement the decoder stops accumulating as soon as len > limit.
+	const limit = 4
+
+	buildPayload := func(valueLen int) []byte {
+		var b []byte
+		b = append(b, binaryTypeString)
+		b = append(b, 'k', 0)                                 // null-terminated key
+		b = append(b, bytes.Repeat([]byte("X"), valueLen)...) // value without terminator
+		return b
+	}
+
+	payload := buildPayload(limit + 1)
+	_, err := ParseBytes(payload, DecodeOptions{Format: FormatBinary, MaxValueBytes: limit})
+	if !errors.Is(err, ErrValueTooLong) {
+		t.Fatalf("early limit: error = %v, want ErrValueTooLong", err)
+	}
+}
+
 func TestManualBinaryEncoder(t *testing.T) {
 	t.Parallel()
 
