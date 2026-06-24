@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning][].
 
 ## [0.2.1][] - 2026-06-24
 
+### Changed
+
+* `NextEvent` with explicit format no longer allocates a 4 KiB `bufio.Reader`;
+  `bytes.Reader` and `strings.Reader` are used directly
+  -78 % B/op text, -85 % B/op binary
+
 ### Fixed
 
 * `NextEvent` now returns `ErrUnexpectedEOFInObject`
