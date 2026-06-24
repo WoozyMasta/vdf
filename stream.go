@@ -15,13 +15,15 @@ import (
 // streamState holds decoder state for true one-pass streaming via NextEvent.
 // It reads events directly from the input reader without building an AST.
 type streamState struct {
-	br           binaryReadReader // non-nil when streaming binary VDF
-	lex          *textLexer       // non-nil when streaming text VDF
-	opts         DecodeOptions    // decode options passed through from Decoder
-	depth        int              // count of currently open object scopes
-	format       Format           // resolved format (never FormatAuto after init)
-	sentDocStart bool             // whether EventDocumentStart has been emitted
-	done         bool             // whether EventDocumentEnd has been emitted (next call returns io.EOF)
+	br           binaryReadReader      // non-nil when streaming binary VDF
+	lex          *textLexer            // non-nil when streaming text VDF
+	seenStack    []map[string]struct{} // per-scope key sets; non-nil only when opts.Strict
+	opts         DecodeOptions         // decode options passed through from Decoder
+	depth        int                   // count of currently open object scopes
+	nodeCount    int                   // total nodes emitted; enforces MaxNodes
+	format       Format                // resolved format (never FormatAuto after init)
+	sentDocStart bool                  // whether EventDocumentStart has been emitted
+	done         bool                  // whether EventDocumentEnd has been emitted (next call returns io.EOF)
 }
 
 // newStreamState initialises streaming from a buffered reader.
@@ -42,6 +44,11 @@ func newStreamState(br *bufio.Reader, opts DecodeOptions) (*streamState, error) 
 	}
 
 	s := &streamState{format: format, opts: opts}
+
+	if opts.Strict {
+		// Pre-allocate root scope for document-level duplicate detection.
+		s.seenStack = []map[string]struct{}{make(map[string]struct{})}
+	}
 
 	switch format {
 	case FormatText:
@@ -90,7 +97,11 @@ func (s *streamState) next() (Event, error) {
 		return Event{Type: EventDocumentEnd, Depth: 0}, nil
 	}
 
-	return ev, err
+	if err != nil {
+		return Event{}, err
+	}
+
+	return s.postProcess(ev)
 }
 
 // nextText reads one event from the text VDF stream.
@@ -280,4 +291,51 @@ func (s *streamState) binaryValue() (string, error) {
 	}
 
 	return str, nil
+}
+
+// postProcess applies MaxNodes and Strict duplicate-key checks to a successfully decoded event.
+// It also maintains the seenStack scope when Strict is enabled.
+func (s *streamState) postProcess(ev Event) (Event, error) {
+	switch ev.Type {
+	case EventObjectStart:
+		if s.opts.Strict {
+			scope := s.seenStack[ev.Depth-1]
+			if _, seen := scope[ev.Key]; seen {
+				return Event{}, fmt.Errorf("%w: key %q", ErrDuplicateKeyInStrictMode, ev.Key)
+			}
+			scope[ev.Key] = struct{}{}
+			s.seenStack = append(s.seenStack, make(map[string]struct{}))
+		}
+		if err := s.incrementNodeCount(); err != nil {
+			return Event{}, err
+		}
+
+	case EventString, EventUint32:
+		if s.opts.Strict {
+			scope := s.seenStack[ev.Depth-1]
+			if _, seen := scope[ev.Key]; seen {
+				return Event{}, fmt.Errorf("%w: key %q", ErrDuplicateKeyInStrictMode, ev.Key)
+			}
+			scope[ev.Key] = struct{}{}
+		}
+		if err := s.incrementNodeCount(); err != nil {
+			return Event{}, err
+		}
+
+	case EventObjectEnd:
+		if s.opts.Strict {
+			s.seenStack = s.seenStack[:len(s.seenStack)-1]
+		}
+	}
+
+	return ev, nil
+}
+
+// incrementNodeCount enforces the MaxNodes limit.
+func (s *streamState) incrementNodeCount() error {
+	s.nodeCount++
+	if s.opts.MaxNodes > 0 && s.nodeCount > s.opts.MaxNodes {
+		return fmt.Errorf("%w: nodes %d > %d", ErrNodeLimitExceeded, s.nodeCount, s.opts.MaxNodes)
+	}
+	return nil
 }

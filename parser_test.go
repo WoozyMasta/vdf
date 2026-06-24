@@ -438,3 +438,87 @@ func TestNextEventTruncatedBinary(t *testing.T) {
 		t.Fatalf("truncated binary: error = %v, want ErrUnexpectedEOFInObject", lastErr)
 	}
 }
+
+func drainNextEvent(t *testing.T, dec *Decoder) error {
+	t.Helper()
+	for {
+		_, err := dec.NextEvent()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+	}
+}
+
+func TestNextEventMaxNodes(t *testing.T) {
+	t.Parallel()
+
+	// "root" { "k1" "v1" "k2" "v2" } has 3 nodes: root object + 2 strings.
+	input := `"root" { "k1" "v1" "k2" "v2" }`
+
+	t.Run("limit not exceeded", func(t *testing.T) {
+		t.Parallel()
+		dec := NewDecoder(strings.NewReader(input), DecodeOptions{Format: FormatText, MaxNodes: 3})
+		if err := drainNextEvent(t, dec); err != nil {
+			t.Fatalf("MaxNodes=3 (exact): unexpected error: %v", err)
+		}
+	})
+
+	t.Run("limit exceeded", func(t *testing.T) {
+		t.Parallel()
+		dec := NewDecoder(strings.NewReader(input), DecodeOptions{Format: FormatText, MaxNodes: 2})
+		if err := drainNextEvent(t, dec); !errors.Is(err, ErrNodeLimitExceeded) {
+			t.Fatalf("MaxNodes=2: error = %v, want ErrNodeLimitExceeded", err)
+		}
+	})
+
+	t.Run("unlimited", func(t *testing.T) {
+		t.Parallel()
+		dec := NewDecoder(strings.NewReader(input), DecodeOptions{Format: FormatText, MaxNodes: 0})
+		if err := drainNextEvent(t, dec); err != nil {
+			t.Fatalf("MaxNodes=0 (unlimited): unexpected error: %v", err)
+		}
+	})
+}
+
+func TestNextEventStrictDuplicates(t *testing.T) {
+	t.Parallel()
+
+	t.Run("duplicate key rejected", func(t *testing.T) {
+		t.Parallel()
+		input := `"root" { "k" "v1" "k" "v2" }`
+		dec := NewDecoder(strings.NewReader(input), DecodeOptions{Format: FormatText, Strict: true})
+		if err := drainNextEvent(t, dec); !errors.Is(err, ErrDuplicateKeyInStrictMode) {
+			t.Fatalf("Strict duplicate: error = %v, want ErrDuplicateKeyInStrictMode", err)
+		}
+	})
+
+	t.Run("duplicate key allowed without strict", func(t *testing.T) {
+		t.Parallel()
+		input := `"root" { "k" "v1" "k" "v2" }`
+		dec := NewDecoder(strings.NewReader(input), DecodeOptions{Format: FormatText, Strict: false})
+		if err := drainNextEvent(t, dec); err != nil {
+			t.Fatalf("non-strict duplicate: unexpected error: %v", err)
+		}
+	})
+
+	t.Run("duplicate root key rejected", func(t *testing.T) {
+		t.Parallel()
+		input := `"root" { "k" "v" } "root" { "k2" "v2" }`
+		dec := NewDecoder(strings.NewReader(input), DecodeOptions{Format: FormatText, Strict: true})
+		if err := drainNextEvent(t, dec); !errors.Is(err, ErrDuplicateKeyInStrictMode) {
+			t.Fatalf("Strict root duplicate: error = %v, want ErrDuplicateKeyInStrictMode", err)
+		}
+	})
+
+	t.Run("same key in different scopes allowed", func(t *testing.T) {
+		t.Parallel()
+		input := `"a" { "k" "v" } "b" { "k" "v" }`
+		dec := NewDecoder(strings.NewReader(input), DecodeOptions{Format: FormatText, Strict: true})
+		if err := drainNextEvent(t, dec); err != nil {
+			t.Fatalf("same key different scopes: unexpected error: %v", err)
+		}
+	})
+}
