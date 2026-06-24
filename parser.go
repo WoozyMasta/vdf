@@ -130,7 +130,7 @@ func (d *Decoder) NextEvent() (Event, error) {
 	if d.stream == nil {
 		// For FormatAuto, Peek requires a bufio.Reader; for explicit formats
 		// pass the raw reader directly to avoid a 4 KiB buffer allocation.
-		r := io.Reader(d.reader)
+		r := d.reader
 		if d.opts.Format == FormatAuto {
 			r = d.bufferedReader()
 		}
