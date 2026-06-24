@@ -373,3 +373,68 @@ func TestNextEventWalkEventsMutualExclusion(t *testing.T) {
 		}
 	})
 }
+
+func TestNextEventTruncatedText(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{"unclosed root", `"root" {`},
+		{"unclosed with key-value", `"root" { "key" "value"`},
+		{"nested unclosed", `"root" { "child" { "key" "value" }`},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dec := NewDecoder(strings.NewReader(tc.input), DecodeOptions{Format: FormatText})
+			var lastErr error
+			for {
+				_, err := dec.NextEvent()
+				if err != nil {
+					lastErr = err
+					break
+				}
+			}
+			if !errors.Is(lastErr, ErrUnexpectedEOFInObject) {
+				t.Fatalf("truncated text %q: error = %v, want ErrUnexpectedEOFInObject", tc.input, lastErr)
+			}
+		})
+	}
+}
+
+func TestNextEventTruncatedBinary(t *testing.T) {
+	t.Parallel()
+
+	// Build a valid binary document, then strip the closing map-end byte(s).
+	doc, err := ParseString(`"root" { "k" "v" }`)
+	if err != nil {
+		t.Fatalf("ParseString: %v", err)
+	}
+
+	full, err := AppendBinary(nil, doc, EncodeOptions{Format: FormatBinary})
+	if err != nil {
+		t.Fatalf("AppendBinary: %v", err)
+	}
+
+	// Remove the last two bytes: inner map-end + outer document terminator.
+	// Removing only one byte leaves depth=0 at EOF which is a valid end;
+	// removing two ensures EOF arrives while depth>0 (inside "root" object).
+	truncated := full[:len(full)-2]
+
+	dec := NewDecoder(strings.NewReader(string(truncated)), DecodeOptions{Format: FormatBinary})
+	var lastErr error
+	for {
+		_, err := dec.NextEvent()
+		if err != nil {
+			lastErr = err
+			break
+		}
+	}
+	if !errors.Is(lastErr, ErrUnexpectedEOFInObject) {
+		t.Fatalf("truncated binary: error = %v, want ErrUnexpectedEOFInObject", lastErr)
+	}
+}

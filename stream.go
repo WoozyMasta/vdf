@@ -82,6 +82,10 @@ func (s *streamState) next() (Event, error) {
 	}
 
 	if errors.Is(err, io.EOF) {
+		if s.depth != 0 {
+			return Event{}, fmt.Errorf("%w: %d open object(s)", ErrUnexpectedEOFInObject, s.depth)
+		}
+
 		s.done = true
 		return Event{Type: EventDocumentEnd, Depth: 0}, nil
 	}
