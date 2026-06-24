@@ -26,11 +26,14 @@ type streamState struct {
 	done         bool                  // whether EventDocumentEnd has been emitted (next call returns io.EOF)
 }
 
-// newStreamState initialises streaming from a buffered reader.
-// Format auto-detection uses Peek without consuming bytes.
-func newStreamState(br *bufio.Reader, opts DecodeOptions) (*streamState, error) {
+// newStreamState initialises streaming from a reader.
+// Format auto-detection uses Peek via a bufio.Reader;
+// for explicit formats the reader is used directly,
+// avoiding an unnecessary 4 KiB buffer allocation.
+func newStreamState(r io.Reader, opts DecodeOptions) (*streamState, error) {
 	format := opts.Format
 	if format == FormatAuto {
+		br := ensureBufferedReader(r)
 		prefix, err := br.Peek(64)
 		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, bufio.ErrBufferFull) {
 			return nil, err
@@ -41,6 +44,8 @@ func newStreamState(br *bufio.Reader, opts DecodeOptions) (*streamState, error) 
 		} else {
 			format = FormatText
 		}
+
+		r = br
 	}
 
 	s := &streamState{format: format, opts: opts}
@@ -52,11 +57,10 @@ func newStreamState(br *bufio.Reader, opts DecodeOptions) (*streamState, error) 
 
 	switch format {
 	case FormatText:
-		// bufio.Reader satisfies runeReader so textLexer uses it directly.
-		s.lex = newTextLexer(br, opts)
+		s.lex = newTextLexer(r, opts)
 
 	case FormatBinary:
-		s.br = br
+		s.br = ensureBinaryReader(r)
 
 	default:
 		return nil, fmt.Errorf("%w: %d", ErrInvalidFormat, format)
