@@ -14,6 +14,25 @@ and this project adheres to [Semantic Versioning][].
 ### Removed
 -->
 
+## [0.2.1][] - 2026-06-24
+
+### Fixed
+
+* `NextEvent` now returns `ErrUnexpectedEOFInObject`
+  when EOF is reached with one or more unclosed objects,
+  matching the behavior of `DecodeDocument`
+* `NextEvent` now enforces `MaxNodes` and `Strict` duplicate-key detection,
+  previously ignored in the streaming path;
+  adds `nodeCount` counter and per-scope key sets to `streamState`
+* `Encoder.Close` now validates that all objects are closed for text format,
+  not only for binary; unclosed objects return `ErrInvalidNodeState`
+* Text lexer `readQuotedString`, `readUnquotedString`
+  and binary decoder `readNullTerminatedString` now enforce byte-length limits
+  during reading rather than after the full string is accumulated,
+  preventing unbounded memory growth on malformed input without a delimiter
+
+[0.2.1]: https://github.com/WoozyMasta/vdf/compare/v0.2.0...v0.2.1
+
 ## [0.2.0][] - 2026-06-24
 
 ### Added
