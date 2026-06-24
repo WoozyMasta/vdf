@@ -151,12 +151,12 @@ func (e *Encoder) EndObject() error {
 
 // Close finalizes manual streaming state.
 func (e *Encoder) Close() error {
-	if e.manualFormat() != FormatBinary || !e.manualBinaryUsed || e.manualBinaryFinished {
-		return nil
-	}
-
 	if e.manualDepth != 0 {
 		return fmt.Errorf("%w: %d unclosed objects", ErrInvalidNodeState, e.manualDepth)
+	}
+
+	if e.manualFormat() != FormatBinary || !e.manualBinaryUsed || e.manualBinaryFinished {
+		return nil
 	}
 
 	e.manualBinaryFinished = true

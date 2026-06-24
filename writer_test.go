@@ -137,6 +137,51 @@ func TestEncodeDocumentValidateOption(t *testing.T) {
 	}
 }
 
+func TestManualEncoderCloseUnclosed(t *testing.T) {
+	t.Parallel()
+
+	t.Run("text unclosed", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		enc := NewEncoder(&buf, EncodeOptions{Format: FormatText})
+		if err := enc.StartObject("root"); err != nil {
+			t.Fatalf("StartObject: %v", err)
+		}
+		// Deliberately skip EndObject.
+		if err := enc.Close(); !errors.Is(err, ErrInvalidNodeState) {
+			t.Fatalf("Close() with unclosed text object: error = %v, want ErrInvalidNodeState", err)
+		}
+	})
+
+	t.Run("text closed", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		enc := NewEncoder(&buf, EncodeOptions{Format: FormatText})
+		if err := enc.StartObject("root"); err != nil {
+			t.Fatalf("StartObject: %v", err)
+		}
+		if err := enc.EndObject(); err != nil {
+			t.Fatalf("EndObject: %v", err)
+		}
+		if err := enc.Close(); err != nil {
+			t.Fatalf("Close() with properly closed text object: %v", err)
+		}
+	})
+
+	t.Run("binary unclosed", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		enc := NewEncoder(&buf, EncodeOptions{Format: FormatBinary})
+		if err := enc.StartObject("root"); err != nil {
+			t.Fatalf("StartObject: %v", err)
+		}
+		// Deliberately skip EndObject.
+		if err := enc.Close(); !errors.Is(err, ErrInvalidNodeState) {
+			t.Fatalf("Close() with unclosed binary object: error = %v, want ErrInvalidNodeState", err)
+		}
+	})
+}
+
 func TestWriteFileWrappers(t *testing.T) {
 	t.Parallel()
 
