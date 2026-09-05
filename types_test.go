@@ -2,6 +2,8 @@ package vdf
 
 import (
 	"errors"
+	"math"
+	"strconv"
 	"testing"
 )
 
@@ -137,5 +139,62 @@ func TestFromMap(t *testing.T) {
 
 	if _, err := FromMap("root", Map{"bad": true}); !errors.Is(err, ErrUnsupportedMapValueType) {
 		t.Fatalf("FromMap(unsupported) error = %v, want ErrUnsupportedMapValueType", err)
+	}
+}
+
+func TestFromMapIntRange(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		value   int
+		want    uint32
+		wantErr bool
+	}{
+		{name: "zero", value: 0, want: 0},
+		{name: "positive", value: 42, want: 42},
+		{name: "negative", value: -1, wantErr: true},
+	}
+
+	maxIntValue := int(^uint(0) >> 1)
+	if uint64(maxIntValue) > math.MaxUint32 {
+		maxUint32 := uint64(math.MaxUint32)
+		maxIntValue = int(maxUint32)
+	}
+	tests = append(tests, struct {
+		name    string
+		value   int
+		want    uint32
+		wantErr bool
+	}{name: "maximum representable", value: maxIntValue, want: uint32(maxIntValue)})
+
+	if strconv.IntSize > 32 {
+		aboveUint32 := uint64(math.MaxUint32) + 1
+		tests = append(tests, struct {
+			name    string
+			value   int
+			want    uint32
+			wantErr bool
+		}{name: "above uint32", value: int(aboveUint32), wantErr: true})
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			doc, err := FromMap("root", Map{"value": test.value})
+			if test.wantErr {
+				if !errors.Is(err, ErrIntOutOfRange) {
+					t.Fatalf("FromMap() error = %v, want %v", err, ErrIntOutOfRange)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("FromMap() error = %v", err)
+			}
+			if got := *doc.Roots[0].Children[0].Uint32Value; got != test.want {
+				t.Fatalf("FromMap() value = %d, want %d", got, test.want)
+			}
+		})
 	}
 }

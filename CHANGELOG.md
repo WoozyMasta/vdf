@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning][].
 ### Removed
 -->
 
+## Unreleased
+
+### Fixed
+
+* Map conversion now compiles on 32-bit targets
+  while preserving integer range checks.
+
 ## [0.2.1][] - 2026-06-24
 
 ### Changed

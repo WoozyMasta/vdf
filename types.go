@@ -337,7 +337,10 @@ func mapValueToNode(key string, value any) (*Node, error) {
 		return NewUint32Node(key, val), nil
 
 	case int:
-		if val < 0 || val > math.MaxUint32 {
+		if val < 0 {
+			return nil, fmt.Errorf("%w: key %q int=%d", ErrIntOutOfRange, key, val)
+		}
+		if uint64(val) > math.MaxUint32 {
 			return nil, fmt.Errorf("%w: key %q int=%d", ErrIntOutOfRange, key, val)
 		}
 		return NewUint32Node(key, uint32(val)), nil
