@@ -83,6 +83,67 @@ func TestEncoderCompactMode(t *testing.T) {
 	}
 }
 
+func TestEncodeDocumentFormatAuto(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		docFormat  Format
+		wantFormat Format
+	}{
+		{name: "document text", docFormat: FormatText, wantFormat: FormatText},
+		{name: "document binary", docFormat: FormatBinary, wantFormat: FormatBinary},
+		{name: "document auto defaults to text", docFormat: FormatAuto, wantFormat: FormatText},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			doc := NewDocumentWithFormat(test.docFormat)
+			root := NewObjectNode("root")
+			root.Add(NewStringNode("key", "value"))
+			doc.AddRoot(root)
+
+			var buf bytes.Buffer
+			enc := NewEncoder(&buf, EncodeOptions{Format: FormatAuto})
+			if err := enc.EncodeDocument(doc); err != nil {
+				t.Fatalf("EncodeDocument() error = %v", err)
+			}
+
+			encoded := buf.Bytes()
+			if test.wantFormat == FormatBinary && encoded[0] != binaryTypeMapStart {
+				t.Fatalf("binary output first byte = %#02x, want %#02x", encoded[0], binaryTypeMapStart)
+			}
+
+			if _, err := ParseBytes(encoded, DecodeOptions{Format: test.wantFormat}); err != nil {
+				t.Fatalf("ParseBytes(format=%v) error = %v", test.wantFormat, err)
+			}
+		})
+	}
+}
+
+func TestManualEncoderFormatAutoUsesText(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	enc := NewEncoder(&buf, EncodeOptions{Format: FormatAuto})
+	if err := enc.StartObject("root"); err != nil {
+		t.Fatalf("StartObject() error = %v", err)
+	}
+	if err := enc.WriteString("key", "value"); err != nil {
+		t.Fatalf("WriteString() error = %v", err)
+	}
+	if err := enc.EndObject(); err != nil {
+		t.Fatalf("EndObject() error = %v", err)
+	}
+	if err := enc.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	if _, err := ParseBytes(buf.Bytes(), DecodeOptions{Format: FormatText}); err != nil {
+		t.Fatalf("ParseBytes(format=text) error = %v", err)
+	}
+}
+
 func TestManualEncoderText(t *testing.T) {
 	t.Parallel()
 

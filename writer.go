@@ -242,9 +242,6 @@ func normalizeEncodeOptions(opts EncodeOptions) EncodeOptions {
 	if opts.Indent == "" {
 		opts.Indent = "\t"
 	}
-	if opts.Format == FormatAuto {
-		opts.Format = FormatText
-	}
 
 	return opts
 }

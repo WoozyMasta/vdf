@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning][].
 
 * Map conversion now compiles on 32-bit targets
   while preserving integer range checks.
+* Full-document encoding with `FormatAuto` now follows `Document.Format`,
+  defaulting to text when the document format is also automatic.
 
 ## [0.2.1][] - 2026-06-24
 
