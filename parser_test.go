@@ -1,11 +1,13 @@
 package vdf
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/iotest"
 )
 
 func TestParseFixtures(t *testing.T) {
@@ -59,6 +61,96 @@ func TestParseFixtures(t *testing.T) {
 				t.Fatalf("root count = %d, want %d", len(doc.Roots), tt.wantRoots)
 			}
 		})
+	}
+}
+
+func TestFormatAutoDetection(t *testing.T) {
+	t.Parallel()
+
+	longKey := strings.Repeat("k", 65)
+	longString := append([]byte{binaryTypeString}, []byte(longKey)...)
+	longString = append(longString, 0)
+	longString = append(longString, []byte("value")...)
+	longString = append(longString, 0, binaryTypeMapEnd)
+
+	tests := []struct {
+		name       string
+		input      []byte
+		wantFormat Format
+	}{
+		{name: "empty input", input: nil, wantFormat: FormatText},
+		{name: "empty binary document", input: []byte{binaryTypeMapEnd}, wantFormat: FormatBinary},
+		{
+			name:       "binary string with long key",
+			input:      longString,
+			wantFormat: FormatBinary,
+		},
+		{
+			name:       "binary object root",
+			input:      []byte{binaryTypeMapStart, 'r', 'o', 'o', 't', 0, binaryTypeMapEnd, binaryTypeMapEnd},
+			wantFormat: FormatBinary,
+		},
+		{
+			name:       "binary numeric root",
+			input:      []byte{binaryTypeNumber, 'n', 0, 42, 0, 0, 0, binaryTypeMapEnd},
+			wantFormat: FormatBinary,
+		},
+		{
+			name:       "text input",
+			input:      []byte(`"root" { "key" "value" }`),
+			wantFormat: FormatText,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			doc, err := ParseBytes(test.input, DecodeOptions{Format: FormatAuto})
+			if err != nil {
+				t.Fatalf("ParseBytes(auto) error = %v", err)
+			}
+			if doc.Format != test.wantFormat {
+				t.Fatalf("DecodeDocument format = %v, want %v", doc.Format, test.wantFormat)
+			}
+
+			dec := NewDecoder(bytes.NewReader(test.input), DecodeOptions{Format: FormatAuto})
+			first, err := dec.NextEvent()
+			if err != nil {
+				t.Fatalf("NextEvent() first call error = %v", err)
+			}
+			if first.Type != EventDocumentStart {
+				t.Fatalf("first NextEvent() type = %v, want %v", first.Type, EventDocumentStart)
+			}
+			if dec.stream.format != test.wantFormat {
+				t.Fatalf("NextEvent format = %v, want %v", dec.stream.format, test.wantFormat)
+			}
+
+			for {
+				if _, err := dec.NextEvent(); errors.Is(err, io.EOF) {
+					break
+				} else if err != nil {
+					t.Fatalf("NextEvent() error = %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestFormatAutoDetectionPeeksOnlyOneByte(t *testing.T) {
+	t.Parallel()
+
+	readErr := errors.New("unexpected read past format discriminator")
+	input := io.MultiReader(
+		bytes.NewReader([]byte{binaryTypeString}),
+		iotest.ErrReader(readErr),
+	)
+	dec := NewDecoder(input, DecodeOptions{Format: FormatAuto})
+
+	event, err := dec.NextEvent()
+	if err != nil {
+		t.Fatalf("NextEvent() error = %v", err)
+	}
+	if event.Type != EventDocumentStart {
+		t.Fatalf("NextEvent() type = %v, want %v", event.Type, EventDocumentStart)
 	}
 }
 

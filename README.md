@@ -212,8 +212,9 @@ All limits use 0 to mean unlimited (the default).
   * `0x01` string
   * `0x02` uint32
   * `0x08` object end
-* **Auto-detection** - `FormatAuto` peeks up to 64 bytes to detect the format.
-  Files shorter than 64 bytes are handled correctly.
+* **Auto-detection** - `FormatAuto` checks the first byte:
+  `0x00`, `0x01`, `0x02` and `0x08` select binary;
+  other bytes and empty input select text.
 * **Duplicate keys** - the AST preserves duplicate keys in source order.
   Use `Node.All(key)` to retrieve all matches.
   `Strict: true` rejects duplicates at parse time.

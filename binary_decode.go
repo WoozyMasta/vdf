@@ -257,27 +257,6 @@ func (d *binaryDecoder) incrementNodeCount() error {
 	return nil
 }
 
-// looksBinaryPrefix checks whether prefix resembles binary VDF payload.
-func looksBinaryPrefix(data []byte) bool {
-	if len(data) == 0 {
-		return false
-	}
-
-	first := data[0]
-	if first != binaryTypeMapStart && first != binaryTypeString && first != binaryTypeNumber {
-		return false
-	}
-
-	checkLen := min(50, len(data))
-	for i := 1; i < checkLen; i++ {
-		if data[i] == 0 {
-			return true
-		}
-	}
-
-	return false
-}
-
 // ensureBufferedReader wraps reader into bufio.Reader when needed.
 func ensureBufferedReader(r io.Reader) *bufio.Reader {
 	if br, ok := r.(*bufio.Reader); ok {

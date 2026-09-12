@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning][].
   while preserving integer range checks.
 * Full-document encoding with `FormatAuto` now follows `Document.Format`,
   defaulting to text when the document format is also automatic.
+* `FormatAuto` now identifies binary input from its first type byte
+  and uses the same one-byte detection path
+  for full-document and streaming decoders.
 
 ## [0.2.1][] - 2026-06-24
 

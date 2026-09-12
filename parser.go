@@ -188,22 +188,24 @@ func ParseTextFile(path string) (*Document, error) {
 	return ParseFile(path, DecodeOptions{Format: FormatText})
 }
 
-// detectStreamFormat peeks a short prefix and infers format heuristically.
+// detectStreamFormat classifies input from its first byte.
 func detectStreamFormat(r *bufio.Reader) (Format, error) {
-	prefix, err := r.Peek(64)
-	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, bufio.ErrBufferFull) {
+	first, err := r.Peek(1)
+	if err != nil && !errors.Is(err, io.EOF) {
 		return FormatAuto, err
 	}
 
-	if len(prefix) == 0 {
+	if len(first) == 0 {
 		return FormatText, nil
 	}
 
-	if looksBinaryPrefix(prefix) {
+	switch first[0] {
+	case binaryTypeMapStart, binaryTypeString, binaryTypeNumber, binaryTypeMapEnd:
 		return FormatBinary, nil
-	}
 
-	return FormatText, nil
+	default:
+		return FormatText, nil
+	}
 }
 
 // normalizeDecodeOptions fills default values for decode options.

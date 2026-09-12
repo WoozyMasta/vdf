@@ -5,7 +5,6 @@
 package vdf
 
 import (
-	"bufio"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -34,17 +33,12 @@ func newStreamState(r io.Reader, opts DecodeOptions) (*streamState, error) {
 	format := opts.Format
 	if format == FormatAuto {
 		br := ensureBufferedReader(r)
-		prefix, err := br.Peek(64)
-		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, bufio.ErrBufferFull) {
+		detected, err := detectStreamFormat(br)
+		if err != nil {
 			return nil, err
 		}
 
-		if looksBinaryPrefix(prefix) {
-			format = FormatBinary
-		} else {
-			format = FormatText
-		}
-
+		format = detected
 		r = br
 	}
 
