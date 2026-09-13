@@ -164,7 +164,11 @@ func (s *streamState) nextText() (Event, error) {
 func (s *streamState) nextBinary() (Event, error) {
 	typeByte, err := s.br.ReadByte()
 	if errors.Is(err, io.EOF) {
-		return Event{}, io.EOF
+		if s.depth > 0 {
+			return Event{}, ErrUnexpectedEOFInObject
+		}
+
+		return Event{}, ErrBufferOverflow
 	}
 
 	if err != nil {

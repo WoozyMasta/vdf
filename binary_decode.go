@@ -62,10 +62,6 @@ func (d *binaryDecoder) decodeDocument() (*Document, error) {
 	for {
 		typeByte, err := d.readTypeByte()
 		if errors.Is(err, io.EOF) {
-			if len(doc.Roots) == 0 {
-				return doc, nil
-			}
-
 			return nil, ErrBufferOverflow
 		}
 
@@ -92,6 +88,12 @@ func (d *binaryDecoder) decodeDocument() (*Document, error) {
 
 // decodeEntry decodes one key/value entry based on its type byte.
 func (d *binaryDecoder) decodeEntry(typeByte byte, depth int) (*Node, error) {
+	switch typeByte {
+	case binaryTypeMapStart, binaryTypeString, binaryTypeNumber:
+	default:
+		return nil, fmt.Errorf("%w: 0x%02x", ErrUnrecognizedType, typeByte)
+	}
+
 	if err := d.checkDepth(depth); err != nil {
 		return nil, err
 	}
@@ -112,7 +114,7 @@ func (d *binaryDecoder) decodeEntry(typeByte byte, depth int) (*Node, error) {
 			childType, err := d.readTypeByte()
 			if err != nil {
 				if errors.Is(err, io.EOF) {
-					return nil, ErrBufferOverflow
+					return nil, ErrUnexpectedEOFInObject
 				}
 
 				return nil, err

@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning][].
 * `FormatAuto` now identifies binary input from its first type byte
   and uses the same one-byte detection path
   for full-document and streaming decoders.
+* Binary decoding now requires the document terminator
+  and rejects unknown type bytes before attempting to read their keys.
 
 ## [0.2.1][] - 2026-06-24
 

@@ -3,6 +3,7 @@ package vdf
 import (
 	"bytes"
 	"errors"
+	"io"
 	"path/filepath"
 	"testing"
 )
@@ -34,6 +35,110 @@ func TestBinaryEncodeDecodeRoundtrip(t *testing.T) {
 
 	if err := decoded.Validate(); err != nil {
 		t.Fatalf("decoded Validate() returned error: %v", err)
+	}
+}
+
+func TestBinaryDocumentFraming(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		input   []byte
+		wantErr error
+	}{
+		{name: "empty document", input: []byte{binaryTypeMapEnd}},
+		{name: "empty input is truncated", input: []byte{}, wantErr: ErrBufferOverflow},
+		{
+			name:  "scalar root with terminator",
+			input: []byte{binaryTypeString, 'k', 0, 'v', 0, binaryTypeMapEnd},
+		},
+		{
+			name:  "object root with terminators",
+			input: []byte{binaryTypeMapStart, 'r', 0, binaryTypeMapEnd, binaryTypeMapEnd},
+		},
+		{
+			name:    "missing document terminator",
+			input:   []byte{binaryTypeString, 'k', 0, 'v', 0},
+			wantErr: ErrBufferOverflow,
+		},
+		{
+			name:    "missing nested object terminator",
+			input:   []byte{binaryTypeMapStart, 'r', 0, binaryTypeString, 'k', 0, 'v', 0},
+			wantErr: ErrUnexpectedEOFInObject,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, fullErr := ParseBytes(test.input, DecodeOptions{Format: FormatBinary})
+			if test.wantErr != nil {
+				if !errors.Is(fullErr, test.wantErr) {
+					t.Fatalf("DecodeDocument() error = %v, want %v", fullErr, test.wantErr)
+				}
+
+				streamErr := drainNextEvent(t, NewDecoder(bytes.NewReader(test.input), DecodeOptions{Format: FormatBinary}))
+				if !errors.Is(streamErr, test.wantErr) {
+					t.Fatalf("NextEvent() error = %v, want %v", streamErr, test.wantErr)
+				}
+
+				return
+			}
+
+			doc, err := ParseBytes(test.input, DecodeOptions{Format: FormatBinary})
+			if err != nil {
+				t.Fatalf("DecodeDocument() error = %v", err)
+			}
+			if doc.Format != FormatBinary {
+				t.Fatalf("document format = %v, want %v", doc.Format, FormatBinary)
+			}
+
+			streamErr := drainNextEvent(t, NewDecoder(bytes.NewReader(test.input), DecodeOptions{Format: FormatBinary}))
+			if streamErr != nil {
+				t.Fatalf("NextEvent() error = %v", streamErr)
+			}
+		})
+	}
+}
+
+func TestBinaryUnknownTypeRejectedBeforeKey(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input []byte
+	}{
+		{name: "root type", input: []byte{0xff}},
+		{name: "nested type", input: []byte{binaryTypeMapStart, 'r', 0, 0xff}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := ParseBytes(test.input, DecodeOptions{Format: FormatBinary})
+			if !errors.Is(err, ErrUnrecognizedType) {
+				t.Fatalf("DecodeDocument() error = %v, want ErrUnrecognizedType", err)
+			}
+
+			dec := NewDecoder(bytes.NewReader(test.input), DecodeOptions{Format: FormatBinary})
+			streamErr := drainNextEvent(t, dec)
+			if !errors.Is(streamErr, ErrUnrecognizedType) {
+				t.Fatalf("NextEvent() error = %v, want ErrUnrecognizedType", streamErr)
+			}
+		})
+	}
+}
+
+func TestBinaryDocumentEndEventOnce(t *testing.T) {
+	t.Parallel()
+
+	dec := NewDecoder(bytes.NewReader([]byte{binaryTypeMapEnd}), DecodeOptions{Format: FormatBinary})
+	if event, err := dec.NextEvent(); err != nil || event.Type != EventDocumentStart {
+		t.Fatalf("first event = (%v, %v), want document start", event.Type, err)
+	}
+	if event, err := dec.NextEvent(); err != nil || event.Type != EventDocumentEnd {
+		t.Fatalf("second event = (%v, %v), want document end", event.Type, err)
+	}
+	if event, err := dec.NextEvent(); !errors.Is(err, io.EOF) || event.Type != 0 {
+		t.Fatalf("third event = (%v, %v), want zero event and EOF", event.Type, err)
 	}
 }
 
