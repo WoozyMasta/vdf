@@ -21,14 +21,14 @@ type textParser struct {
 // parseTextDocument parses one full text VDF stream.
 func parseTextDocument(r io.Reader, opts DecodeOptions) (*Document, error) {
 	parser := &textParser{
-		lexer: newTextLexer(r, opts),
+		lexer: newTextLexer(r),
 		opts:  opts,
 	}
 
 	doc := NewDocumentWithFormat(FormatText)
 
 	for {
-		tok, err := parser.peekToken()
+		tok, err := parser.peekToken(effectiveKeyLimit(opts), ErrKeyTooLong)
 		if err != nil {
 			return nil, err
 		}
@@ -56,7 +56,7 @@ func (p *textParser) parseNode(depth int) (*Node, error) {
 		return nil, err
 	}
 
-	keyTok, err := p.nextToken()
+	keyTok, err := p.nextToken(effectiveKeyLimit(p.opts), ErrKeyTooLong)
 	if err != nil {
 		return nil, err
 	}
@@ -69,14 +69,14 @@ func (p *textParser) parseNode(depth int) (*Node, error) {
 		return nil, fmt.Errorf("%w: key %q len=%d limit=%d", ErrKeyTooLong, keyTok.value, len(keyTok.value), limit)
 	}
 
-	nextTok, err := p.peekToken()
+	nextTok, err := p.peekToken(effectiveValueLimit(p.opts), ErrValueTooLong)
 	if err != nil {
 		return nil, err
 	}
 
 	switch nextTok.kind {
 	case textTokenString:
-		valueTok, err := p.nextToken()
+		valueTok, err := p.nextToken(effectiveValueLimit(p.opts), ErrValueTooLong)
 		if err != nil {
 			return nil, err
 		}
@@ -102,7 +102,7 @@ func (p *textParser) parseNode(depth int) (*Node, error) {
 
 // parseObject parses an object body until a matching closing brace.
 func (p *textParser) parseObject(key string, depth int) (*Node, error) {
-	lbrace, err := p.nextToken()
+	lbrace, err := p.nextToken(0, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -117,14 +117,14 @@ func (p *textParser) parseObject(key string, depth int) (*Node, error) {
 	}
 
 	for {
-		tok, err := p.peekToken()
+		tok, err := p.peekToken(effectiveKeyLimit(p.opts), ErrKeyTooLong)
 		if err != nil {
 			return nil, err
 		}
 
 		// Closing brace completes the current object scope.
 		if tok.kind == textTokenRBrace {
-			if _, err := p.nextToken(); err != nil {
+			if _, err := p.nextToken(0, nil); err != nil {
 				return nil, err
 			}
 
@@ -150,23 +150,23 @@ func (p *textParser) parseObject(key string, depth int) (*Node, error) {
 }
 
 // nextToken consumes one token from parser stream.
-func (p *textParser) nextToken() (textToken, error) {
+func (p *textParser) nextToken(limit int, limitErr error) (textToken, error) {
 	if p.hasPeeked {
 		tok := p.peeked
 		p.hasPeeked = false
 		return tok, nil
 	}
 
-	return p.lexer.nextToken()
+	return p.lexer.nextToken(limit, limitErr)
 }
 
 // peekToken peeks one token without consuming it.
-func (p *textParser) peekToken() (textToken, error) {
+func (p *textParser) peekToken(limit int, limitErr error) (textToken, error) {
 	if p.hasPeeked {
 		return p.peeked, nil
 	}
 
-	tok, err := p.lexer.nextToken()
+	tok, err := p.lexer.nextToken(limit, limitErr)
 	if err != nil {
 		return textToken{}, err
 	}

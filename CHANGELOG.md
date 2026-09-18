@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning][].
   for full-document and streaming decoders.
 * Binary decoding now requires the document terminator
   and rejects unknown type bytes before attempting to read their keys.
+* Text key and value limits now stop token accumulation
+  at their context-specific byte limits.
 
 ## [0.2.1][] - 2026-06-24
 

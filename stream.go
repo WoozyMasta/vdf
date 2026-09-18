@@ -51,7 +51,7 @@ func newStreamState(r io.Reader, opts DecodeOptions) (*streamState, error) {
 
 	switch format {
 	case FormatText:
-		s.lex = newTextLexer(r, opts)
+		s.lex = newTextLexer(r)
 
 	case FormatBinary:
 		s.br = ensureBinaryReader(r)
@@ -106,7 +106,7 @@ func (s *streamState) next() (Event, error) {
 // Reads two tokens when a key is encountered to determine whether
 // the next token opens a child object or supplies a scalar value.
 func (s *streamState) nextText() (Event, error) {
-	tok, err := s.lex.nextToken()
+	tok, err := s.lex.nextToken(effectiveKeyLimit(s.opts), ErrKeyTooLong)
 	if err != nil {
 		return Event{}, err
 	}
@@ -128,7 +128,7 @@ func (s *streamState) nextText() (Event, error) {
 			return Event{}, fmt.Errorf("%w: key %q len=%d limit=%d", ErrKeyTooLong, key, len(key), limit)
 		}
 
-		next, err := s.lex.nextToken()
+		next, err := s.lex.nextToken(effectiveValueLimit(s.opts), ErrValueTooLong)
 		if err != nil {
 			return Event{}, err
 		}

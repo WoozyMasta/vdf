@@ -41,16 +41,15 @@ type runeReader interface {
 
 // textLexer tokenizes text VDF input.
 type textLexer struct {
-	reader    runeReader    // Reader for the input.
-	opts      DecodeOptions // Decode options (used for MaxStringBytes ceiling).
-	line      int           // Line number of the current position.
-	col       int           // Column number of the current position.
-	peeked    rune          // Peeked rune value.
-	hasPeeked bool          // Whether peeked rune is set.
+	reader    runeReader // Reader for the input.
+	line      int        // Line number of the current position.
+	col       int        // Column number of the current position.
+	peeked    rune       // Peeked rune value.
+	hasPeeked bool       // Whether peeked rune is set.
 }
 
 // newTextLexer creates a text lexer.
-func newTextLexer(r io.Reader, opts DecodeOptions) *textLexer {
+func newTextLexer(r io.Reader) *textLexer {
 	reader, ok := r.(runeReader)
 	if !ok {
 		reader = bufio.NewReader(r)
@@ -60,7 +59,6 @@ func newTextLexer(r io.Reader, opts DecodeOptions) *textLexer {
 		reader: reader,
 		line:   1,
 		col:    0,
-		opts:   opts,
 	}
 }
 
@@ -151,13 +149,21 @@ func (l *textLexer) skipLineComment() error {
 }
 
 // readQuotedString reads one quoted string and decodes escapes.
-func (l *textLexer) readQuotedString() (string, error) {
+func (l *textLexer) readQuotedString(limit int, limitErr error) (string, error) {
 	if _, err := l.readRune(); err != nil {
 		return "", err
 	}
 
-	limit := l.opts.MaxStringBytes
 	var sb strings.Builder
+	appendRune := func(r rune) error {
+		sb.WriteRune(r)
+		if limit > 0 && sb.Len() > limit {
+			return fmt.Errorf("%w: len=%d limit=%d", limitErr, sb.Len(), limit)
+		}
+
+		return nil
+	}
+
 	for {
 		r, err := l.readRune()
 		if err == io.EOF {
@@ -184,33 +190,46 @@ func (l *textLexer) readQuotedString() (string, error) {
 
 			switch next {
 			case 'n':
-				sb.WriteRune('\n')
+				err = appendRune('\n')
+
 			case 't':
-				sb.WriteRune('\t')
+				err = appendRune('\t')
+
 			case 'r':
-				sb.WriteRune('\r')
+				err = appendRune('\r')
+
 			case '\\':
-				sb.WriteRune('\\')
+				err = appendRune('\\')
+
 			case '"':
-				sb.WriteRune('"')
+				err = appendRune('"')
+
 			default:
-				sb.WriteRune('\\')
-				sb.WriteRune(next)
+				if err := appendRune('\\'); err != nil {
+					return "", err
+				}
+				err = appendRune(next)
+			}
+
+			if err != nil {
+				return "", err
 			}
 		} else {
-			sb.WriteRune(r)
-		}
-
-		if limit > 0 && sb.Len() > limit {
-			return "", fmt.Errorf("%w: len=%d limit=%d", ErrValueTooLong, sb.Len(), limit)
+			if err := appendRune(r); err != nil {
+				return "", err
+			}
 		}
 	}
 }
 
 // readUnquotedString reads one unquoted string token.
-func (l *textLexer) readUnquotedString() (string, error) {
-	limit := l.opts.MaxStringBytes
+func (l *textLexer) readUnquotedString(prefix string, limit int, limitErr error) (string, error) {
 	var sb strings.Builder
+	sb.WriteString(prefix)
+	if limit > 0 && sb.Len() > limit {
+		return "", fmt.Errorf("%w: len=%d limit=%d", limitErr, sb.Len(), limit)
+	}
+
 	for {
 		r, err := l.peekRune()
 		if err == io.EOF {
@@ -230,9 +249,8 @@ func (l *textLexer) readUnquotedString() (string, error) {
 		}
 
 		sb.WriteRune(r)
-
 		if limit > 0 && sb.Len() > limit {
-			return "", fmt.Errorf("%w: len=%d limit=%d", ErrValueTooLong, sb.Len(), limit)
+			return "", fmt.Errorf("%w: len=%d limit=%d", limitErr, sb.Len(), limit)
 		}
 	}
 
@@ -254,7 +272,7 @@ func isWhitespace(r rune) bool {
 }
 
 // nextToken returns one lexical token.
-func (l *textLexer) nextToken() (textToken, error) {
+func (l *textLexer) nextToken(limit int, limitErr error) (textToken, error) {
 	for {
 		if err := l.skipWhitespace(); err != nil {
 			return textToken{}, err
@@ -289,11 +307,11 @@ func (l *textLexer) nextToken() (textToken, error) {
 				continue
 			}
 
-			rest, err := l.readUnquotedString()
+			rest, err := l.readUnquotedString("/", limit, limitErr)
 			if err != nil {
 				return textToken{}, err
 			}
-			return textToken{kind: textTokenString, value: "/" + rest, line: startLine, col: startCol}, nil
+			return textToken{kind: textTokenString, value: rest, line: startLine, col: startCol}, nil
 
 		case '{':
 			if _, err := l.readRune(); err != nil {
@@ -308,14 +326,14 @@ func (l *textLexer) nextToken() (textToken, error) {
 			return textToken{kind: textTokenRBrace, value: "}", line: startLine, col: startCol}, nil
 
 		case '"':
-			value, err := l.readQuotedString()
+			value, err := l.readQuotedString(limit, limitErr)
 			if err != nil {
 				return textToken{}, err
 			}
 			return textToken{kind: textTokenString, value: value, line: startLine, col: startCol}, nil
 
 		default:
-			value, err := l.readUnquotedString()
+			value, err := l.readUnquotedString("", limit, limitErr)
 			if err != nil {
 				return textToken{}, err
 			}

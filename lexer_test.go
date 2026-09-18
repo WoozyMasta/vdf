@@ -8,9 +8,9 @@ import (
 func TestTextLexerTracksLineAndColumn(t *testing.T) {
 	t.Parallel()
 
-	lexer := newTextLexer(strings.NewReader("\"a\"\n\"b\""), DecodeOptions{})
+	lexer := newTextLexer(strings.NewReader("\"a\"\n\"b\""))
 
-	first, err := lexer.nextToken()
+	first, err := lexer.nextToken(0, nil)
 	if err != nil {
 		t.Fatalf("nextToken(first) returned error: %v", err)
 	}
@@ -19,7 +19,7 @@ func TestTextLexerTracksLineAndColumn(t *testing.T) {
 		t.Fatalf("first token pos = (%d,%d), want (1,0)", first.line, first.col)
 	}
 
-	second, err := lexer.nextToken()
+	second, err := lexer.nextToken(0, nil)
 	if err != nil {
 		t.Fatalf("nextToken(second) returned error: %v", err)
 	}
@@ -39,8 +39,8 @@ func TestLexerStringLimitEnforcedDuringRead(t *testing.T) {
 	t.Run("quoted no closing quote", func(t *testing.T) {
 		t.Parallel()
 		input := `"` + strings.Repeat("A", limit+1)
-		l := newTextLexer(strings.NewReader(input), DecodeOptions{MaxStringBytes: limit})
-		_, err := l.nextToken()
+		l := newTextLexer(strings.NewReader(input))
+		_, err := l.nextToken(limit, ErrValueTooLong)
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
@@ -50,8 +50,8 @@ func TestLexerStringLimitEnforcedDuringRead(t *testing.T) {
 	t.Run("unquoted no delimiter", func(t *testing.T) {
 		t.Parallel()
 		input := strings.Repeat("B", limit+1)
-		l := newTextLexer(strings.NewReader(input), DecodeOptions{MaxStringBytes: limit})
-		_, err := l.nextToken()
+		l := newTextLexer(strings.NewReader(input))
+		_, err := l.nextToken(limit, ErrValueTooLong)
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}

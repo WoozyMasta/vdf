@@ -280,18 +280,91 @@ func TestStringLengthLimits(t *testing.T) {
 	}
 
 	_, err = ParseBytes([]byte(longKey), DecodeOptions{Format: FormatText, MaxStringBytes: 10})
-	if !errors.Is(err, ErrKeyTooLong) && !errors.Is(err, ErrValueTooLong) {
-		t.Fatalf("MaxStringBytes(key): error = %v, want ErrKeyTooLong or ErrValueTooLong", err)
+	if !errors.Is(err, ErrKeyTooLong) {
+		t.Fatalf("MaxStringBytes(key): error = %v, want ErrKeyTooLong", err)
 	}
 
 	_, err = ParseBytes([]byte(longVal), DecodeOptions{Format: FormatText, MaxStringBytes: 10})
-	if !errors.Is(err, ErrKeyTooLong) && !errors.Is(err, ErrValueTooLong) {
-		t.Fatalf("MaxStringBytes(val): error = %v, want ErrKeyTooLong or ErrValueTooLong", err)
+	if !errors.Is(err, ErrValueTooLong) {
+		t.Fatalf("MaxStringBytes(val): error = %v, want ErrValueTooLong", err)
+	}
+
+	if _, err := ParseBytes([]byte(`"long-key" "v"`), DecodeOptions{
+		Format:         FormatText,
+		MaxKeyBytes:    9,
+		MaxStringBytes: 1,
+	}); err != nil {
+		t.Fatalf("MaxKeyBytes override: unexpected error = %v", err)
+	}
+
+	if _, err := ParseBytes([]byte(`"k" "long-value"`), DecodeOptions{
+		Format:         FormatText,
+		MaxValueBytes:  10,
+		MaxStringBytes: 1,
+	}); err != nil {
+		t.Fatalf("MaxValueBytes override: unexpected error = %v", err)
 	}
 
 	_, err = ParseBytes([]byte(longVal), DecodeOptions{Format: FormatText})
 	if err != nil {
 		t.Fatalf("no limits: unexpected error = %v", err)
+	}
+}
+
+func TestTextTokenLimitsStopReadingRemainder(t *testing.T) {
+	t.Parallel()
+
+	const limit = 4
+	readErr := errors.New("reader consumed past token limit")
+	longToken := strings.Repeat("x", limit+1)
+	tests := []struct {
+		name    string
+		prefix  string
+		opts    DecodeOptions
+		wantErr error
+	}{
+		{
+			name:    "quoted key",
+			prefix:  `"` + longToken,
+			opts:    DecodeOptions{Format: FormatText, MaxKeyBytes: limit},
+			wantErr: ErrKeyTooLong,
+		},
+		{
+			name:    "unquoted key",
+			prefix:  longToken,
+			opts:    DecodeOptions{Format: FormatText, MaxKeyBytes: limit},
+			wantErr: ErrKeyTooLong,
+		},
+		{
+			name:    "quoted value",
+			prefix:  `"k" "` + longToken,
+			opts:    DecodeOptions{Format: FormatText, MaxValueBytes: limit},
+			wantErr: ErrValueTooLong,
+		},
+		{
+			name:    "unquoted value",
+			prefix:  `"k" ` + longToken,
+			opts:    DecodeOptions{Format: FormatText, MaxValueBytes: limit},
+			wantErr: ErrValueTooLong,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			newReader := func() io.Reader {
+				return io.MultiReader(strings.NewReader(test.prefix), iotest.ErrReader(readErr))
+			}
+
+			_, fullErr := NewDecoder(newReader(), test.opts).DecodeDocument()
+			if !errors.Is(fullErr, test.wantErr) {
+				t.Fatalf("DecodeDocument() error = %v, want %v", fullErr, test.wantErr)
+			}
+
+			streamErr := drainNextEvent(t, NewDecoder(newReader(), test.opts))
+			if !errors.Is(streamErr, test.wantErr) {
+				t.Fatalf("NextEvent() error = %v, want %v", streamErr, test.wantErr)
+			}
+		})
 	}
 }
 
