@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning][].
   and rejects unknown type bytes before attempting to read their keys.
 * Text key and value limits now stop token accumulation
   at their context-specific byte limits.
+* Strict duplicate keys are rejected before decoding their values or subtrees.
 
 ## [0.2.1][] - 2026-06-24
 

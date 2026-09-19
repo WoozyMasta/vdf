@@ -58,6 +58,10 @@ func parseBinaryDocument(r io.Reader, opts DecodeOptions) (*Document, error) {
 // decodeDocument decodes a full binary document.
 func (d *binaryDecoder) decodeDocument() (*Document, error) {
 	doc := NewDocumentWithFormat(FormatBinary)
+	var rootKeys map[string]struct{}
+	if d.opts.Strict {
+		rootKeys = make(map[string]struct{})
+	}
 
 	for {
 		typeByte, err := d.readTypeByte()
@@ -73,13 +77,9 @@ func (d *binaryDecoder) decodeDocument() (*Document, error) {
 			return doc, nil
 		}
 
-		node, err := d.decodeEntry(typeByte, 1)
+		node, err := d.decodeEntry(typeByte, 1, rootKeys, "")
 		if err != nil {
 			return nil, err
-		}
-
-		if d.opts.Strict && containsKey(doc.Roots, node.Key) {
-			return nil, fmt.Errorf("%w: root key %q", ErrDuplicateKeyInStrictMode, node.Key)
 		}
 
 		doc.AddRoot(node)
@@ -87,7 +87,7 @@ func (d *binaryDecoder) decodeDocument() (*Document, error) {
 }
 
 // decodeEntry decodes one key/value entry based on its type byte.
-func (d *binaryDecoder) decodeEntry(typeByte byte, depth int) (*Node, error) {
+func (d *binaryDecoder) decodeEntry(typeByte byte, depth int, seenKeys map[string]struct{}, parentKey string) (*Node, error) {
 	switch typeByte {
 	case binaryTypeMapStart, binaryTypeString, binaryTypeNumber:
 	default:
@@ -103,11 +103,24 @@ func (d *binaryDecoder) decodeEntry(typeByte byte, depth int) (*Node, error) {
 		return nil, err
 	}
 
+	if d.opts.Strict && !recordStrictKey(seenKeys, key) {
+		if depth == 1 {
+			return nil, fmt.Errorf("%w: root key %q", ErrDuplicateKeyInStrictMode, key)
+		}
+
+		return nil, fmt.Errorf("%w: key %q in object %q", ErrDuplicateKeyInStrictMode, key, parentKey)
+	}
+
 	switch typeByte {
 	case binaryTypeMapStart:
 		node := NewObjectNode(key)
 		if err := d.incrementNodeCount(); err != nil {
 			return nil, err
+		}
+
+		var childKeys map[string]struct{}
+		if d.opts.Strict {
+			childKeys = make(map[string]struct{})
 		}
 
 		for {
@@ -126,13 +139,9 @@ func (d *binaryDecoder) decodeEntry(typeByte byte, depth int) (*Node, error) {
 			}
 
 			// Recursively decode each nested entry until map end is reached.
-			child, err := d.decodeEntry(childType, depth+1)
+			child, err := d.decodeEntry(childType, depth+1, childKeys, key)
 			if err != nil {
 				return nil, err
-			}
-
-			if d.opts.Strict && containsKey(node.Children, child.Key) {
-				return nil, fmt.Errorf("%w: key %q in object %q", ErrDuplicateKeyInStrictMode, child.Key, key)
 			}
 
 			node.Add(child)

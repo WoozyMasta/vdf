@@ -127,6 +127,9 @@ func (s *streamState) nextText() (Event, error) {
 		if limit := effectiveKeyLimit(s.opts); limit > 0 && len(key) > limit {
 			return Event{}, fmt.Errorf("%w: key %q len=%d limit=%d", ErrKeyTooLong, key, len(key), limit)
 		}
+		if err := s.checkStrictKey(key); err != nil {
+			return Event{}, err
+		}
 
 		next, err := s.lex.nextToken(effectiveValueLimit(s.opts), ErrValueTooLong)
 		if err != nil {
@@ -189,6 +192,9 @@ func (s *streamState) nextBinary() (Event, error) {
 		if err != nil {
 			return Event{}, err
 		}
+		if err := s.checkStrictKey(key); err != nil {
+			return Event{}, err
+		}
 
 		if s.opts.MaxDepth > 0 && s.depth >= s.opts.MaxDepth {
 			return Event{}, fmt.Errorf("%w: depth %d exceeds MaxDepth %d",
@@ -203,6 +209,9 @@ func (s *streamState) nextBinary() (Event, error) {
 		if err != nil {
 			return Event{}, err
 		}
+		if err := s.checkStrictKey(key); err != nil {
+			return Event{}, err
+		}
 
 		val, err := s.binaryValue()
 		if err != nil {
@@ -214,6 +223,9 @@ func (s *streamState) nextBinary() (Event, error) {
 	case binaryTypeNumber:
 		key, err := s.binaryKey()
 		if err != nil {
+			return Event{}, err
+		}
+		if err := s.checkStrictKey(key); err != nil {
 			return Event{}, err
 		}
 
@@ -232,6 +244,19 @@ func (s *streamState) nextBinary() (Event, error) {
 	default:
 		return Event{}, fmt.Errorf("%w: 0x%02x", ErrUnrecognizedType, typeByte)
 	}
+}
+
+// checkStrictKey rejects a duplicate key before its payload is consumed.
+func (s *streamState) checkStrictKey(key string) error {
+	if !s.opts.Strict {
+		return nil
+	}
+
+	if !recordStrictKey(s.seenStack[s.depth], key) {
+		return fmt.Errorf("%w: key %q", ErrDuplicateKeyInStrictMode, key)
+	}
+
+	return nil
 }
 
 // binaryNullTerm reads one null-terminated string from the binary stream,
@@ -289,11 +314,6 @@ func (s *streamState) postProcess(ev Event) (Event, error) {
 	switch ev.Type {
 	case EventObjectStart:
 		if s.opts.Strict {
-			scope := s.seenStack[ev.Depth-1]
-			if _, seen := scope[ev.Key]; seen {
-				return Event{}, fmt.Errorf("%w: key %q", ErrDuplicateKeyInStrictMode, ev.Key)
-			}
-			scope[ev.Key] = struct{}{}
 			s.seenStack = append(s.seenStack, make(map[string]struct{}))
 		}
 		if err := s.incrementNodeCount(); err != nil {
@@ -301,13 +321,6 @@ func (s *streamState) postProcess(ev Event) (Event, error) {
 		}
 
 	case EventString, EventUint32:
-		if s.opts.Strict {
-			scope := s.seenStack[ev.Depth-1]
-			if _, seen := scope[ev.Key]; seen {
-				return Event{}, fmt.Errorf("%w: key %q", ErrDuplicateKeyInStrictMode, ev.Key)
-			}
-			scope[ev.Key] = struct{}{}
-		}
 		if err := s.incrementNodeCount(); err != nil {
 			return Event{}, err
 		}

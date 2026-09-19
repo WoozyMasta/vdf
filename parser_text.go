@@ -26,6 +26,10 @@ func parseTextDocument(r io.Reader, opts DecodeOptions) (*Document, error) {
 	}
 
 	doc := NewDocumentWithFormat(FormatText)
+	var rootKeys map[string]struct{}
+	if opts.Strict {
+		rootKeys = make(map[string]struct{})
+	}
 
 	for {
 		tok, err := parser.peekToken(effectiveKeyLimit(opts), ErrKeyTooLong)
@@ -37,13 +41,9 @@ func parseTextDocument(r io.Reader, opts DecodeOptions) (*Document, error) {
 			return doc, nil
 		}
 
-		node, err := parser.parseNode(1)
+		node, err := parser.parseNode(1, rootKeys, "")
 		if err != nil {
 			return nil, err
-		}
-
-		if parser.opts.Strict && containsKey(doc.Roots, node.Key) {
-			return nil, fmt.Errorf("%w: root key %q", ErrDuplicateKeyInStrictMode, node.Key)
 		}
 
 		doc.AddRoot(node)
@@ -51,7 +51,7 @@ func parseTextDocument(r io.Reader, opts DecodeOptions) (*Document, error) {
 }
 
 // parseNode parses either a scalar key/value entry or object entry.
-func (p *textParser) parseNode(depth int) (*Node, error) {
+func (p *textParser) parseNode(depth int, seenKeys map[string]struct{}, parentKey string) (*Node, error) {
 	if err := p.checkDepth(depth); err != nil {
 		return nil, err
 	}
@@ -67,6 +67,14 @@ func (p *textParser) parseNode(depth int) (*Node, error) {
 
 	if limit := effectiveKeyLimit(p.opts); limit > 0 && len(keyTok.value) > limit {
 		return nil, fmt.Errorf("%w: key %q len=%d limit=%d", ErrKeyTooLong, keyTok.value, len(keyTok.value), limit)
+	}
+
+	if p.opts.Strict && !recordStrictKey(seenKeys, keyTok.value) {
+		if depth == 1 {
+			return nil, fmt.Errorf("%w: root key %q", ErrDuplicateKeyInStrictMode, keyTok.value)
+		}
+
+		return nil, fmt.Errorf("%w: key %q in object %q", ErrDuplicateKeyInStrictMode, keyTok.value, parentKey)
 	}
 
 	nextTok, err := p.peekToken(effectiveValueLimit(p.opts), ErrValueTooLong)
@@ -116,6 +124,11 @@ func (p *textParser) parseObject(key string, depth int) (*Node, error) {
 		return nil, err
 	}
 
+	var childKeys map[string]struct{}
+	if p.opts.Strict {
+		childKeys = make(map[string]struct{})
+	}
+
 	for {
 		tok, err := p.peekToken(effectiveKeyLimit(p.opts), ErrKeyTooLong)
 		if err != nil {
@@ -135,14 +148,9 @@ func (p *textParser) parseObject(key string, depth int) (*Node, error) {
 			return nil, fmt.Errorf("%w for object %q", ErrUnexpectedEOFInObject, key)
 		}
 
-		child, err := p.parseNode(depth + 1)
+		child, err := p.parseNode(depth+1, childKeys, key)
 		if err != nil {
 			return nil, err
-		}
-
-		// Strict mode rejects duplicate keys at the same object depth.
-		if p.opts.Strict && containsKey(node.Children, child.Key) {
-			return nil, fmt.Errorf("%w: key %q in object %q", ErrDuplicateKeyInStrictMode, child.Key, key)
 		}
 
 		node.Add(child)
@@ -195,13 +203,12 @@ func (p *textParser) incrementNodeCount() error {
 	return nil
 }
 
-// containsKey checks whether a node list already contains a key.
-func containsKey(nodes []*Node, key string) bool {
-	for _, node := range nodes {
-		if node != nil && node.Key == key {
-			return true
-		}
+// recordStrictKey reports whether key is new in a strict scope and records it.
+func recordStrictKey(seen map[string]struct{}, key string) bool {
+	if _, exists := seen[key]; exists {
+		return false
 	}
 
-	return false
+	seen[key] = struct{}{}
+	return true
 }

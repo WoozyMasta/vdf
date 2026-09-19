@@ -687,3 +687,172 @@ func TestNextEventStrictDuplicates(t *testing.T) {
 		}
 	})
 }
+
+func TestStrictDuplicateDetectionAcrossFormats(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{name: "duplicate root", input: `"dup" "one" "dup" "two"`},
+		{name: "duplicate scalar child", input: `"root" { "k" "one" "k" "two" }`},
+		{name: "duplicate object child", input: `"root" { "child" { } "child" { } }`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			text, err := ParseString(test.input)
+			if err != nil {
+				t.Fatalf("ParseString(): %v", err)
+			}
+			binaryData, err := AppendBinary(nil, text, EncodeOptions{Format: FormatBinary})
+			if err != nil {
+				t.Fatalf("AppendBinary(): %v", err)
+			}
+
+			for _, format := range []Format{FormatText, FormatBinary} {
+				var input []byte
+				if format == FormatText {
+					input = []byte(test.input)
+				} else {
+					input = binaryData
+				}
+
+				if _, err := ParseBytes(
+					input,
+					DecodeOptions{Format: format, Strict: true},
+				); !errors.Is(err, ErrDuplicateKeyInStrictMode) {
+					t.Errorf("ParseBytes(%v): error = %v, want ErrDuplicateKeyInStrictMode", format, err)
+				}
+
+				dec := NewDecoder(bytes.NewReader(input), DecodeOptions{Format: format, Strict: true})
+				if err := drainNextEvent(t, dec); !errors.Is(err, ErrDuplicateKeyInStrictMode) {
+					t.Errorf("NextEvent(%v): error = %v, want ErrDuplicateKeyInStrictMode", format, err)
+				}
+			}
+		})
+	}
+
+	t.Run("same key in separate scopes", func(t *testing.T) {
+		t.Parallel()
+		input := `"root" { "left" { "same" "one" } "right" { "same" "two" } }`
+		text, err := ParseString(input)
+		if err != nil {
+			t.Fatalf("ParseString(): %v", err)
+		}
+		binaryData, err := AppendBinary(nil, text, EncodeOptions{Format: FormatBinary})
+		if err != nil {
+			t.Fatalf("AppendBinary(): %v", err)
+		}
+
+		for _, data := range []struct {
+			format Format
+			input  []byte
+		}{{FormatText, []byte(input)}, {FormatBinary, binaryData}} {
+			if _, err := ParseBytes(data.input, DecodeOptions{Format: data.format, Strict: true}); err != nil {
+				t.Errorf("ParseBytes(%v): %v", data.format, err)
+			}
+			if err := drainNextEvent(t, NewDecoder(
+				bytes.NewReader(data.input),
+				DecodeOptions{Format: data.format, Strict: true},
+			)); err != nil {
+				t.Errorf("NextEvent(%v): %v", data.format, err)
+			}
+		}
+	})
+
+	t.Run("non-strict duplicates preserve order", func(t *testing.T) {
+		t.Parallel()
+		input := `"root" { "dup" "first" "dup" "second" }`
+		text, err := ParseString(input)
+		if err != nil {
+			t.Fatalf("ParseString(): %v", err)
+		}
+		binaryData, err := AppendBinary(nil, text, EncodeOptions{Format: FormatBinary})
+		if err != nil {
+			t.Fatalf("AppendBinary(): %v", err)
+		}
+
+		for _, data := range []struct {
+			format Format
+			input  []byte
+		}{{FormatText, []byte(input)}, {FormatBinary, binaryData}} {
+			doc, err := ParseBytes(data.input, DecodeOptions{Format: data.format})
+			if err != nil {
+				t.Fatalf("ParseBytes(%v): %v", data.format, err)
+			}
+			children := doc.Roots[0].Children
+			if len(children) != 2 ||
+				children[0].Key != "dup" ||
+				children[0].StringValue == nil ||
+				*children[0].StringValue != "first" ||
+				children[1].Key != "dup" ||
+				children[1].StringValue == nil ||
+				*children[1].StringValue != "second" {
+				t.Errorf("ParseBytes(%v) children = %#v, want duplicate values in source order", data.format, children)
+			}
+
+			dec := NewDecoder(bytes.NewReader(data.input), DecodeOptions{Format: data.format})
+			var values []string
+			for {
+				event, err := dec.NextEvent()
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				if err != nil {
+					t.Fatalf("NextEvent(%v): %v", data.format, err)
+				}
+				if event.Type == EventString && event.Key == "dup" && event.StringValue != nil {
+					values = append(values, *event.StringValue)
+				}
+			}
+			if len(values) != 2 || values[0] != "first" || values[1] != "second" {
+				t.Errorf("NextEvent(%v) duplicate values = %v, want [first second]", data.format, values)
+			}
+		}
+	})
+}
+
+func TestStrictDuplicateDetectionPrecedesMalformedValue(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		format Format
+		input  []byte
+	}{
+		{
+			name:   "text",
+			format: FormatText,
+			input:  []byte(`"dup" "first" "dup" "unterminated`),
+		},
+		{
+			name:   "binary",
+			format: FormatBinary,
+			input: []byte{
+				binaryTypeString, 'd', 'u', 'p', 0, 'f', 'i', 'r', 's', 't', 0, binaryTypeString, 'd', 'u', 'p', 0,
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := ParseBytes(
+				test.input,
+				DecodeOptions{Format: test.format, Strict: true},
+			); !errors.Is(err, ErrDuplicateKeyInStrictMode) {
+				t.Errorf("ParseBytes(): error = %v, want ErrDuplicateKeyInStrictMode", err)
+			}
+			if err := drainNextEvent(t, NewDecoder(
+				bytes.NewReader(test.input),
+				DecodeOptions{Format: test.format, Strict: true},
+			)); !errors.Is(err, ErrDuplicateKeyInStrictMode) {
+				t.Errorf("NextEvent(): error = %v, want ErrDuplicateKeyInStrictMode", err)
+			}
+		})
+	}
+}
