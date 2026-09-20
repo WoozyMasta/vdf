@@ -94,10 +94,6 @@ func (d *binaryDecoder) decodeEntry(typeByte byte, depth int, seenKeys map[strin
 		return nil, fmt.Errorf("%w: 0x%02x", ErrUnrecognizedType, typeByte)
 	}
 
-	if err := d.checkDepth(depth); err != nil {
-		return nil, err
-	}
-
 	key, err := d.readKey()
 	if err != nil {
 		return nil, err
@@ -113,6 +109,10 @@ func (d *binaryDecoder) decodeEntry(typeByte byte, depth int, seenKeys map[strin
 
 	switch typeByte {
 	case binaryTypeMapStart:
+		if err := d.checkDepth(depth); err != nil {
+			return nil, err
+		}
+
 		node := NewObjectNode(key)
 		if err := d.incrementNodeCount(); err != nil {
 			return nil, err

@@ -41,9 +41,13 @@ WalkEvents and NextEvent are mutually exclusive on a single Decoder instance.
 
 # Security limits
 
-DecodeOptions.MaxDepth and MaxNodes bound recursion and node count.
-MaxKeyBytes, MaxValueBytes, and MaxStringBytes bound string lengths
-for keys and values respectively. All limits use 0 to mean unlimited.
+DecodeOptions.MaxDepth limits nested object scopes:
+a root object has depth 1, and scalar leaves do not increase object depth.
+Event.Depth remains traversal depth,
+so a scalar inside a root object has event depth 2 even when MaxDepth is 1.
+MaxNodes bounds node count. MaxKeyBytes, MaxValueBytes,
+and MaxStringBytes bound string lengths for keys and values respectively.
+All limits use 0 to mean unlimited.
 
 # Encode API
 

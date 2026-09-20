@@ -16,7 +16,7 @@ type Event struct {
 	Uint32Value *uint32 `json:"uint32_value,omitempty" yaml:"uint32_value,omitempty"`
 	// Key is the node key associated with this event.
 	Key string `json:"key,omitempty" yaml:"key,omitempty"`
-	// Depth is the traversal depth for this event.
+	// Depth is traversal depth; scalar leaves may exceed DecodeOptions.MaxDepth.
 	Depth int `json:"depth" yaml:"depth"`
 	// Type is the event kind.
 	Type EventType `json:"type" yaml:"type"`
@@ -76,7 +76,8 @@ const (
 
 // DecodeOptions controls decoder behavior.
 type DecodeOptions struct {
-	// MaxDepth limits nested object depth (0 means unlimited).
+	// MaxDepth limits nested object scopes; a root object has depth 1.
+	// A value of 0 is unlimited.
 	MaxDepth int
 	// MaxNodes limits total parsed nodes (0 means unlimited).
 	MaxNodes int

@@ -232,6 +232,83 @@ func TestDecodeOptionsLimits(t *testing.T) {
 	}
 }
 
+func TestMaxDepthObjectNestingAcrossFormats(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		input         string
+		maxDepth      int
+		wantErr       bool
+		wantLeafDepth int
+	}{
+		{name: "root scalar", input: `"k" "v"`, maxDepth: 1, wantLeafDepth: 1},
+		{name: "root object scalar", input: `"root" { "k" "v" }`, maxDepth: 1, wantLeafDepth: 2},
+		{name: "nested object exceeds one", input: `"root" { "child" { } }`, maxDepth: 1, wantErr: true},
+		{name: "nested object at boundary", input: `"root" { "child" { } }`, maxDepth: 2},
+		{name: "deep object exceeds two", input: `"root" { "child" { "leaf" { } } }`, maxDepth: 2, wantErr: true},
+		{name: "deep object at boundary", input: `"root" { "child" { "leaf" { } } }`, maxDepth: 3},
+		{name: "unlimited", input: `"root" { "child" { "leaf" { } } }`, maxDepth: 0},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			textDoc, err := ParseString(test.input)
+			if err != nil {
+				t.Fatalf("ParseString(): %v", err)
+			}
+			binaryData, err := AppendBinary(nil, textDoc, EncodeOptions{Format: FormatBinary})
+			if err != nil {
+				t.Fatalf("AppendBinary(): %v", err)
+			}
+
+			for _, data := range []struct {
+				format Format
+				input  []byte
+			}{{FormatText, []byte(test.input)}, {FormatBinary, binaryData}} {
+				opts := DecodeOptions{Format: data.format, MaxDepth: test.maxDepth}
+				_, fullErr := ParseBytes(data.input, opts)
+				streamErr := drainNextEvent(t, NewDecoder(bytes.NewReader(data.input), opts))
+				if test.wantErr {
+					if !errors.Is(fullErr, ErrDepthLimitExceeded) {
+						t.Errorf("DecodeDocument(%v): error = %v, want ErrDepthLimitExceeded", data.format, fullErr)
+					}
+					if !errors.Is(streamErr, ErrDepthLimitExceeded) {
+						t.Errorf("NextEvent(%v): error = %v, want ErrDepthLimitExceeded", data.format, streamErr)
+					}
+
+					continue
+				}
+
+				if fullErr != nil {
+					t.Errorf("DecodeDocument(%v): %v", data.format, fullErr)
+				}
+				if streamErr != nil {
+					t.Errorf("NextEvent(%v): %v", data.format, streamErr)
+				}
+				if test.wantLeafDepth > 0 {
+					dec := NewDecoder(bytes.NewReader(data.input), opts)
+					for {
+						event, err := dec.NextEvent()
+						if errors.Is(err, io.EOF) {
+							break
+						}
+
+						if err != nil {
+							t.Fatalf("NextEvent(%v): %v", data.format, err)
+						}
+						if event.Type == EventString && event.Key == "k" && event.Depth != test.wantLeafDepth {
+							t.Errorf("Event.Depth(%v) = %d, want traversal depth %d", data.format, event.Depth, test.wantLeafDepth)
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestDecoderNextEvent(t *testing.T) {
 	t.Parallel()
 

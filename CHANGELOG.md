@@ -30,6 +30,9 @@ and this project adheres to [Semantic Versioning][].
 * Text key and value limits now stop token accumulation
   at their context-specific byte limits.
 * Strict duplicate keys are rejected before decoding their values or subtrees.
+* `MaxDepth` now limits object nesting consistently
+  across full and streaming decoders;
+  scalar leaves do not consume object depth.
 
 ## [0.2.1][] - 2026-06-24
 

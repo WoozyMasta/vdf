@@ -52,10 +52,6 @@ func parseTextDocument(r io.Reader, opts DecodeOptions) (*Document, error) {
 
 // parseNode parses either a scalar key/value entry or object entry.
 func (p *textParser) parseNode(depth int, seenKeys map[string]struct{}, parentKey string) (*Node, error) {
-	if err := p.checkDepth(depth); err != nil {
-		return nil, err
-	}
-
 	keyTok, err := p.nextToken(effectiveKeyLimit(p.opts), ErrKeyTooLong)
 	if err != nil {
 		return nil, err
@@ -110,6 +106,10 @@ func (p *textParser) parseNode(depth int, seenKeys map[string]struct{}, parentKe
 
 // parseObject parses an object body until a matching closing brace.
 func (p *textParser) parseObject(key string, depth int) (*Node, error) {
+	if err := p.checkDepth(depth); err != nil {
+		return nil, err
+	}
+
 	lbrace, err := p.nextToken(0, nil)
 	if err != nil {
 		return nil, err

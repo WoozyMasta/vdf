@@ -199,6 +199,12 @@ doc, err := vdf.ParseBytes(data, vdf.DecodeOptions{
 ```
 
 All limits use 0 to mean unlimited (the default).
+`MaxDepth` counts nested object scopes:
+the root object has depth 1, while scalar leaves do not increase
+object depth.
+`Event.Depth` reports traversal depth,
+so a scalar directly inside the root object
+has event depth 2 even when `MaxDepth` is 1.
 
 ## Compatibility notes
 
