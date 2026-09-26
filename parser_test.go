@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -614,6 +615,217 @@ func TestNextEventWalkEventsMutualExclusion(t *testing.T) {
 			t.Fatalf("WalkEvents after NextEvent: error = %v, want ErrInvalidNodeState", err)
 		}
 	})
+}
+
+func TestDecoderModeTransitionsAcrossFormats(t *testing.T) {
+	t.Parallel()
+
+	textInput := `"root" { "scalar" "value" "nested" { "leaf" "text" } } "tail" "end"`
+	doc, err := ParseString(textInput)
+	if err != nil {
+		t.Fatalf("ParseString(): %v", err)
+	}
+	binaryInput, err := AppendBinary(nil, doc, EncodeOptions{Format: FormatBinary})
+	if err != nil {
+		t.Fatalf("AppendBinary(): %v", err)
+	}
+
+	formats := []struct {
+		name   string
+		format Format
+		input  []byte
+	}{
+		{name: "text", format: FormatText, input: []byte(textInput)},
+		{name: "binary", format: FormatBinary, input: binaryInput},
+	}
+
+	for _, format := range formats {
+		t.Run(format.name, func(t *testing.T) {
+			t.Parallel()
+
+			t.Run("event parity", func(t *testing.T) {
+				walk := NewDecoder(bytes.NewReader(format.input), DecodeOptions{Format: format.format})
+				stream := NewDecoder(bytes.NewReader(format.input), DecodeOptions{Format: format.format})
+				var walkEvents, streamEvents []Event
+				for {
+					event, err := walk.WalkEvents()
+					if errors.Is(err, io.EOF) {
+						break
+					}
+
+					if err != nil {
+						t.Fatalf("WalkEvents(): %v", err)
+					}
+					walkEvents = append(walkEvents, event)
+				}
+
+				for {
+					event, err := stream.NextEvent()
+					if errors.Is(err, io.EOF) {
+						break
+					}
+
+					if err != nil {
+						t.Fatalf("NextEvent(): %v", err)
+					}
+					streamEvents = append(streamEvents, event)
+				}
+
+				if event, err := stream.NextEvent(); !errors.Is(err, io.EOF) || event.Type != 0 {
+					t.Errorf("NextEvent() after clean end = (%v, %v), want zero event and EOF", event.Type, err)
+				}
+				if !reflect.DeepEqual(streamEvents, walkEvents) {
+					t.Errorf("NextEvent() sequence = %#v, want WalkEvents() sequence %#v", streamEvents, walkEvents)
+				}
+			})
+
+			t.Run("mode transitions", func(t *testing.T) {
+				newDecoder := func() *Decoder {
+					return NewDecoder(bytes.NewReader(format.input), DecodeOptions{Format: format.format})
+				}
+
+				t.Run("DecodeDocument then NextEvent", func(t *testing.T) {
+					dec := newDecoder()
+					if _, err := dec.DecodeDocument(); err != nil {
+						t.Fatalf("DecodeDocument(): %v", err)
+					}
+					if _, err := dec.NextEvent(); !errors.Is(err, ErrInvalidNodeState) {
+						t.Fatalf("NextEvent(): error = %v, want ErrInvalidNodeState", err)
+					}
+				})
+
+				t.Run("WalkEvents then NextEvent", func(t *testing.T) {
+					dec := newDecoder()
+					if _, err := dec.WalkEvents(); err != nil {
+						t.Fatalf("WalkEvents(): %v", err)
+					}
+					if _, err := dec.NextEvent(); !errors.Is(err, ErrInvalidNodeState) {
+						t.Fatalf("NextEvent(): error = %v, want ErrInvalidNodeState", err)
+					}
+				})
+
+				t.Run("NextEvent then DecodeDocument", func(t *testing.T) {
+					dec := newDecoder()
+					if _, err := dec.NextEvent(); err != nil {
+						t.Fatalf("NextEvent(): %v", err)
+					}
+					if _, err := dec.DecodeDocument(); !errors.Is(err, ErrInvalidNodeState) {
+						t.Fatalf("DecodeDocument(): error = %v, want ErrInvalidNodeState", err)
+					}
+				})
+
+				t.Run("NextEvent then WalkEvents", func(t *testing.T) {
+					dec := newDecoder()
+					if _, err := dec.NextEvent(); err != nil {
+						t.Fatalf("NextEvent(): %v", err)
+					}
+					if _, err := dec.WalkEvents(); !errors.Is(err, ErrInvalidNodeState) {
+						t.Fatalf("WalkEvents(): error = %v, want ErrInvalidNodeState", err)
+					}
+				})
+
+				t.Run("AST methods remain compatible", func(t *testing.T) {
+					dec := newDecoder()
+					if _, err := dec.DecodeDocument(); err != nil {
+						t.Fatalf("DecodeDocument(): %v", err)
+					}
+					if event, err := dec.WalkEvents(); err != nil || event.Type != EventDocumentStart {
+						t.Fatalf("WalkEvents() = (%v, %v), want document start", event.Type, err)
+					}
+
+					dec = newDecoder()
+					if _, err := dec.WalkEvents(); err != nil {
+						t.Fatalf("WalkEvents(): %v", err)
+					}
+					if _, err := dec.DecodeDocument(); err != nil {
+						t.Fatalf("DecodeDocument() after WalkEvents: %v", err)
+					}
+				})
+			})
+		})
+	}
+}
+
+func TestNextEventErrorsAreTerminalAcrossFormats(t *testing.T) {
+	t.Parallel()
+
+	duplicateText := `"dup" "one" "dup" "two"`
+	duplicateDoc, err := ParseString(duplicateText)
+	if err != nil {
+		t.Fatalf("ParseString(): %v", err)
+	}
+	duplicateBinary, err := AppendBinary(nil, duplicateDoc, EncodeOptions{Format: FormatBinary})
+	if err != nil {
+		t.Fatalf("AppendBinary(): %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		format Format
+		input  []byte
+		opts   DecodeOptions
+		want   error
+	}{
+		{
+			name:   "text strict duplicate",
+			format: FormatText,
+			input:  []byte(duplicateText),
+			opts:   DecodeOptions{Strict: true},
+			want:   ErrDuplicateKeyInStrictMode,
+		},
+		{
+			name:   "binary strict duplicate",
+			format: FormatBinary,
+			input:  duplicateBinary,
+			opts:   DecodeOptions{Strict: true},
+			want:   ErrDuplicateKeyInStrictMode,
+		},
+		{
+			name:   "text max nodes",
+			format: FormatText,
+			input:  []byte(`"root" { "k" "v" }`),
+			opts:   DecodeOptions{MaxNodes: 1},
+			want:   ErrNodeLimitExceeded,
+		},
+		{
+			name:   "binary max nodes",
+			format: FormatBinary,
+			input: []byte{
+				binaryTypeMapStart, 'r', 0, binaryTypeString, 'k', 0, 'v', 0, binaryTypeMapEnd, binaryTypeMapEnd,
+			},
+			opts: DecodeOptions{MaxNodes: 1},
+			want: ErrNodeLimitExceeded,
+		},
+		{
+			name:   "text parser error",
+			format: FormatText,
+			input:  []byte(`"broken"`),
+			want:   ErrExpectedValueOrObject,
+		},
+		{
+			name:   "binary parser error",
+			format: FormatBinary,
+			input:  []byte{0xff},
+			want:   ErrUnrecognizedType,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			test.opts.Format = test.format
+			dec := NewDecoder(bytes.NewReader(test.input), test.opts)
+			firstErr := drainNextEvent(t, dec)
+			if !errors.Is(firstErr, test.want) {
+				t.Fatalf("NextEvent() error = %v, want %v", firstErr, test.want)
+			}
+			for attempt := 0; attempt < 2; attempt++ {
+				if _, err := dec.NextEvent(); err != firstErr {
+					t.Fatalf("NextEvent() retry error = %v, want cached error %v", err, firstErr)
+				}
+			}
+		})
+	}
 }
 
 func TestNextEventTruncatedText(t *testing.T) {

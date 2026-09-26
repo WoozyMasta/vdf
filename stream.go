@@ -17,8 +17,8 @@ type streamState struct {
 	br           binaryReadReader      // non-nil when streaming binary VDF
 	lex          *textLexer            // non-nil when streaming text VDF
 	seenStack    []map[string]struct{} // per-scope key sets; non-nil only when opts.Strict
+	objectKeys   []string              // keys for open object scopes, used by end events
 	opts         DecodeOptions         // decode options passed through from Decoder
-	depth        int                   // count of currently open object scopes
 	nodeCount    int                   // total nodes emitted; enforces MaxNodes
 	format       Format                // resolved format (never FormatAuto after init)
 	sentDocStart bool                  // whether EventDocumentStart has been emitted
@@ -87,8 +87,8 @@ func (s *streamState) next() (Event, error) {
 	}
 
 	if errors.Is(err, io.EOF) {
-		if s.depth != 0 {
-			return Event{}, fmt.Errorf("%w: %d open object(s)", ErrUnexpectedEOFInObject, s.depth)
+		if len(s.objectKeys) != 0 {
+			return Event{}, fmt.Errorf("%w: %d open object(s)", ErrUnexpectedEOFInObject, len(s.objectKeys))
 		}
 
 		s.done = true
@@ -116,11 +116,12 @@ func (s *streamState) nextText() (Event, error) {
 		return Event{}, io.EOF
 
 	case textTokenRBrace:
-		if s.depth == 0 {
+		if len(s.objectKeys) == 0 {
 			return Event{}, fmt.Errorf("%w: unexpected '}' at line %d", ErrUnexpectedCharacter, tok.line)
 		}
-		s.depth--
-		return Event{Type: EventObjectEnd, Depth: s.depth + 1}, nil
+
+		depth := len(s.objectKeys)
+		return Event{Type: EventObjectEnd, Key: s.objectKeys[depth-1], Depth: depth}, nil
 
 	case textTokenString:
 		key := tok.value
@@ -138,19 +139,19 @@ func (s *streamState) nextText() (Event, error) {
 
 		switch next.kind {
 		case textTokenLBrace:
-			if s.opts.MaxDepth > 0 && s.depth >= s.opts.MaxDepth {
+			depth := len(s.objectKeys)
+			if s.opts.MaxDepth > 0 && depth >= s.opts.MaxDepth {
 				return Event{}, fmt.Errorf("%w: depth %d exceeds MaxDepth %d",
-					ErrDepthLimitExceeded, s.depth+1, s.opts.MaxDepth)
+					ErrDepthLimitExceeded, depth+1, s.opts.MaxDepth)
 			}
-			s.depth++
-			return Event{Type: EventObjectStart, Key: key, Depth: s.depth}, nil
+			return Event{Type: EventObjectStart, Key: key, Depth: depth + 1}, nil
 
 		case textTokenString:
 			val := next.value
 			if limit := effectiveValueLimit(s.opts); limit > 0 && len(val) > limit {
 				return Event{}, fmt.Errorf("%w: key %q len=%d limit=%d", ErrValueTooLong, key, len(val), limit)
 			}
-			return Event{Type: EventString, Key: key, Depth: s.depth + 1, StringValue: &val}, nil
+			return Event{Type: EventString, Key: key, Depth: len(s.objectKeys) + 1, StringValue: &val}, nil
 
 		default:
 			return Event{}, fmt.Errorf("%w at line %d col %d",
@@ -167,7 +168,7 @@ func (s *streamState) nextText() (Event, error) {
 func (s *streamState) nextBinary() (Event, error) {
 	typeByte, err := s.br.ReadByte()
 	if errors.Is(err, io.EOF) {
-		if s.depth > 0 {
+		if len(s.objectKeys) > 0 {
 			return Event{}, ErrUnexpectedEOFInObject
 		}
 
@@ -180,12 +181,12 @@ func (s *streamState) nextBinary() (Event, error) {
 
 	switch typeByte {
 	case binaryTypeMapEnd:
-		if s.depth == 0 {
+		if len(s.objectKeys) == 0 {
 			// Outer document terminator (bare 0x08 at depth 0).
 			return Event{}, io.EOF
 		}
-		s.depth--
-		return Event{Type: EventObjectEnd, Depth: s.depth + 1}, nil
+		depth := len(s.objectKeys)
+		return Event{Type: EventObjectEnd, Key: s.objectKeys[depth-1], Depth: depth}, nil
 
 	case binaryTypeMapStart:
 		key, err := s.binaryKey()
@@ -196,13 +197,13 @@ func (s *streamState) nextBinary() (Event, error) {
 			return Event{}, err
 		}
 
-		if s.opts.MaxDepth > 0 && s.depth >= s.opts.MaxDepth {
+		depth := len(s.objectKeys)
+		if s.opts.MaxDepth > 0 && depth >= s.opts.MaxDepth {
 			return Event{}, fmt.Errorf("%w: depth %d exceeds MaxDepth %d",
-				ErrDepthLimitExceeded, s.depth+1, s.opts.MaxDepth)
+				ErrDepthLimitExceeded, depth+1, s.opts.MaxDepth)
 		}
 
-		s.depth++
-		return Event{Type: EventObjectStart, Key: key, Depth: s.depth}, nil
+		return Event{Type: EventObjectStart, Key: key, Depth: depth + 1}, nil
 
 	case binaryTypeString:
 		key, err := s.binaryKey()
@@ -218,7 +219,7 @@ func (s *streamState) nextBinary() (Event, error) {
 			return Event{}, err
 		}
 
-		return Event{Type: EventString, Key: key, Depth: s.depth + 1, StringValue: &val}, nil
+		return Event{Type: EventString, Key: key, Depth: len(s.objectKeys) + 1, StringValue: &val}, nil
 
 	case binaryTypeNumber:
 		key, err := s.binaryKey()
@@ -239,7 +240,7 @@ func (s *streamState) nextBinary() (Event, error) {
 		}
 
 		v := binary.LittleEndian.Uint32(raw[:])
-		return Event{Type: EventUint32, Key: key, Depth: s.depth + 1, Uint32Value: &v}, nil
+		return Event{Type: EventUint32, Key: key, Depth: len(s.objectKeys) + 1, Uint32Value: &v}, nil
 
 	default:
 		return Event{}, fmt.Errorf("%w: 0x%02x", ErrUnrecognizedType, typeByte)
@@ -252,7 +253,7 @@ func (s *streamState) checkStrictKey(key string) error {
 		return nil
 	}
 
-	if !recordStrictKey(s.seenStack[s.depth], key) {
+	if !recordStrictKey(s.seenStack[len(s.objectKeys)], key) {
 		return fmt.Errorf("%w: key %q", ErrDuplicateKeyInStrictMode, key)
 	}
 
@@ -308,11 +309,11 @@ func (s *streamState) binaryValue() (string, error) {
 	return s.binaryNullTerm(effectiveValueLimit(s.opts), ErrValueTooLong)
 }
 
-// postProcess applies MaxNodes and Strict duplicate-key checks to a successfully decoded event.
-// It also maintains the seenStack scope when Strict is enabled.
+// postProcess applies node limits and updates object and strict-key scopes.
 func (s *streamState) postProcess(ev Event) (Event, error) {
 	switch ev.Type {
 	case EventObjectStart:
+		s.objectKeys = append(s.objectKeys, ev.Key)
 		if s.opts.Strict {
 			s.seenStack = append(s.seenStack, make(map[string]struct{}))
 		}
@@ -326,6 +327,7 @@ func (s *streamState) postProcess(ev Event) (Event, error) {
 		}
 
 	case EventObjectEnd:
+		s.objectKeys = s.objectKeys[:len(s.objectKeys)-1]
 		if s.opts.Strict {
 			s.seenStack = s.seenStack[:len(s.seenStack)-1]
 		}
@@ -340,5 +342,6 @@ func (s *streamState) incrementNodeCount() error {
 	if s.opts.MaxNodes > 0 && s.nodeCount > s.opts.MaxNodes {
 		return fmt.Errorf("%w: nodes %d > %d", ErrNodeLimitExceeded, s.nodeCount, s.opts.MaxNodes)
 	}
+
 	return nil
 }

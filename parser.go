@@ -14,15 +14,29 @@ import (
 	"strings"
 )
 
+// decoderMode records which decoding path owns the reader.
+type decoderMode uint8
+
+const (
+	// decoderModeUnset means no decoding operation has started.
+	decoderModeUnset decoderMode = iota
+	// decoderModeAST means DecodeDocument or WalkEvents owns decoding.
+	decoderModeAST
+	// decoderModeStream means NextEvent owns the raw reader.
+	decoderModeStream
+)
+
 // Decoder decodes VDF data from an input stream.
 type Decoder struct {
 	decodeErr error          // Error from last decode operation.
+	streamErr error          // Terminal error from NextEvent streaming.
 	reader    io.Reader      // Source input reader.
 	buffered  *bufio.Reader  // Lazy buffered reader for auto-detect and generic streams.
 	decoded   *Document      // Decoded document.
 	events    *eventIterator // Event iterator for WalkEvents (AST-based).
 	stream    *streamState   // Streaming state for NextEvent (true streaming).
 	opts      DecodeOptions  // Decode options.
+	mode      decoderMode    // Decode path selected by the first operation.
 }
 
 // NewDecoder creates a decoder with normalized options.
@@ -35,6 +49,11 @@ func NewDecoder(r io.Reader, opts DecodeOptions) *Decoder {
 
 // DecodeDocument decodes the full input stream into a document.
 func (d *Decoder) DecodeDocument() (*Document, error) {
+	if d.mode == decoderModeStream {
+		return nil, fmt.Errorf("%w: NextEvent streaming is already active on this decoder", ErrInvalidNodeState)
+	}
+	d.mode = decoderModeAST
+
 	if d.decoded != nil || d.decodeErr != nil {
 		return d.decoded, d.decodeErr
 	}
@@ -67,8 +86,10 @@ func (d *Decoder) DecodeDocument() (*Document, error) {
 	switch format {
 	case FormatText:
 		doc, err = parseTextDocument(source, d.opts)
+
 	case FormatBinary:
 		doc, err = parseBinaryDocument(source, d.opts)
+
 	default:
 		err = fmt.Errorf("%w: %d", ErrInvalidFormat, format)
 	}
@@ -91,10 +112,11 @@ func (d *Decoder) DecodeDocument() (*Document, error) {
 // Use WalkEvents when you need the full document available for further access after iteration.
 // For a one-pass, lower-memory alternative see NextEvent.
 func (d *Decoder) WalkEvents() (Event, error) {
-	if d.stream != nil {
+	if d.mode == decoderModeStream {
 		return Event{}, fmt.Errorf("%w: NextEvent streaming is already active on this decoder", ErrInvalidNodeState)
 	}
 
+	d.mode = decoderModeAST
 	if d.events == nil {
 		doc, err := d.DecodeDocument()
 		if err != nil {
@@ -123,8 +145,15 @@ func (d *Decoder) WalkEvents() (Event, error) {
 // The decoded document is not available after iteration;
 // use WalkEvents when post-iteration document access is required.
 func (d *Decoder) NextEvent() (Event, error) {
-	if d.events != nil {
-		return Event{}, fmt.Errorf("%w: WalkEvents is already active on this decoder", ErrInvalidNodeState)
+	if d.mode == decoderModeAST {
+		return Event{}, fmt.Errorf("%w: AST decoding is already active on this decoder", ErrInvalidNodeState)
+	}
+
+	if d.mode == decoderModeUnset {
+		d.mode = decoderModeStream
+	}
+	if d.streamErr != nil {
+		return Event{}, d.streamErr
 	}
 
 	if d.stream == nil {
@@ -137,13 +166,19 @@ func (d *Decoder) NextEvent() (Event, error) {
 
 		s, err := newStreamState(r, d.opts)
 		if err != nil {
+			d.streamErr = err
 			return Event{}, err
 		}
 
 		d.stream = s
 	}
 
-	return d.stream.next()
+	event, err := d.stream.next()
+	if err != nil && !errors.Is(err, io.EOF) {
+		d.streamErr = err
+	}
+
+	return event, err
 }
 
 // Parse decodes text VDF from reader.

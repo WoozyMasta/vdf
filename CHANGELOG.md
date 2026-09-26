@@ -33,6 +33,8 @@ and this project adheres to [Semantic Versioning][].
 * `MaxDepth` now limits object nesting consistently
   across full and streaming decoders;
   scalar leaves do not consume object depth.
+* Decoder modes reject reader reuse across AST and streaming paths;
+  streaming errors are terminal and object-end events include their keys.
 
 ## [0.2.1][] - 2026-06-24
 
