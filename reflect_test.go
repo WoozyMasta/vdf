@@ -7,6 +7,8 @@ package vdf
 import (
 	"errors"
 	"fmt"
+	"math/big"
+	"reflect"
 	"testing"
 )
 
@@ -384,6 +386,216 @@ func TestUnmarshalRequiresPointer(t *testing.T) {
 	if !errors.Is(err, ErrReflectUnsupportedType) {
 		t.Fatalf("expected ErrReflectUnsupportedType, got %v", err)
 	}
+}
+
+func TestUnmarshalIntegerBoundaries(t *testing.T) {
+	t.Parallel()
+
+	types := []reflect.Type{
+		reflect.TypeFor[uint8](),
+		reflect.TypeFor[uint16](),
+		reflect.TypeFor[uint32](),
+		reflect.TypeFor[uint](),
+		reflect.TypeFor[uint64](),
+		reflect.TypeFor[int8](),
+		reflect.TypeFor[int16](),
+		reflect.TypeFor[int32](),
+		reflect.TypeFor[int](),
+		reflect.TypeFor[int64](),
+	}
+
+	for _, fieldType := range types {
+		t.Run(fieldType.String(), func(t *testing.T) {
+			t.Parallel()
+
+			min, max := integerBounds(fieldType)
+			value, err := unmarshalReflectValue(t, fieldType, NewStringNode("value", max.String()))
+			if err != nil {
+				t.Fatalf("Unmarshal(max string): %v", err)
+			}
+			if fieldType.Kind() >= reflect.Int && fieldType.Kind() <= reflect.Int64 {
+				if value.Int() != max.Int64() {
+					t.Fatalf("max string = %d, want %s", value.Int(), max)
+				}
+			} else if value.Uint() != max.Uint64() {
+				t.Fatalf("max string = %d, want %s", value.Uint(), max)
+			}
+			if fieldType.Kind() >= reflect.Uint && fieldType.Kind() <= reflect.Uint64 {
+				value, err = unmarshalReflectValue(t, fieldType, NewStringNode("value", "0"))
+				if err != nil || value.Uint() != 0 {
+					t.Fatalf("Unmarshal(unsigned zero) = (%v, %v), want (0, nil)", value, err)
+				}
+			}
+
+			overflow := new(big.Int).Add(max, big.NewInt(1))
+			if _, err := unmarshalReflectValue(
+				t, fieldType,
+				NewStringNode("value", overflow.String()),
+			); !errors.Is(err, ErrReflectFieldMismatch) {
+				t.Errorf(
+					"Unmarshal(overflow string %s): error = %v, want ErrReflectFieldMismatch",
+					overflow, err)
+			}
+
+			if fieldType.Kind() >= reflect.Int && fieldType.Kind() <= reflect.Int64 {
+				value, err = unmarshalReflectValue(t, fieldType, NewStringNode("value", min.String()))
+				if err != nil {
+					t.Fatalf("Unmarshal(min string): %v", err)
+				}
+				if value.Int() != min.Int64() {
+					t.Fatalf("min string = %d, want %s", value.Int(), min)
+				}
+
+				underflow := new(big.Int).Sub(min, big.NewInt(1))
+				if _, err := unmarshalReflectValue(
+					t, fieldType,
+					NewStringNode("value", underflow.String()),
+				); !errors.Is(err, ErrReflectFieldMismatch) {
+					t.Errorf(
+						"Unmarshal(underflow string %s): error = %v, want ErrReflectFieldMismatch",
+						underflow, err)
+				}
+			}
+
+			maxUint32 := new(big.Int).SetUint64(uint64(^uint32(0)))
+			nodeValue := max
+			if nodeValue.Cmp(maxUint32) > 0 {
+				nodeValue = maxUint32
+			}
+			nodeUint := uint32(nodeValue.Uint64())
+			value, err = unmarshalReflectValue(t, fieldType, NewUint32Node("value", nodeUint))
+			if err != nil {
+				t.Fatalf("Unmarshal(NodeUint32 %d): %v", nodeUint, err)
+			}
+			if fieldType.Kind() >= reflect.Int && fieldType.Kind() <= reflect.Int64 {
+				if value.Int() != int64(nodeUint) {
+					t.Fatalf("NodeUint32 value = %d, want %d", value.Int(), nodeUint)
+				}
+			} else if value.Uint() != uint64(nodeUint) {
+				t.Fatalf("NodeUint32 value = %d, want %d", value.Uint(), nodeUint)
+			}
+
+			if max.Cmp(maxUint32) < 0 {
+				nodeOverflow := uint32(overflow.Uint64())
+				if _, err := unmarshalReflectValue(
+					t, fieldType,
+					NewUint32Node("value", nodeOverflow),
+				); !errors.Is(err, ErrReflectFieldMismatch) {
+					t.Errorf(
+						"Unmarshal(overflow NodeUint32 %d): error = %v, want ErrReflectFieldMismatch",
+						nodeOverflow, err)
+				}
+			}
+		})
+	}
+}
+
+func TestUnmarshalRejectsInvalidDocumentAndScalarNodes(t *testing.T) {
+	t.Parallel()
+
+	var out struct {
+		Text  string `vdf:"text"`
+		Count uint32 `vdf:"count"`
+	}
+	if err := Unmarshal(nil, "root", &out); !errors.Is(err, ErrInvalidNodeState) {
+		t.Fatalf("Unmarshal(nil): error = %v, want ErrInvalidNodeState", err)
+	}
+
+	tests := []struct {
+		name string
+		node *Node
+	}{
+		{name: "nil string payload", node: &Node{Key: "text", Kind: NodeString}},
+		{name: "nil uint32 payload", node: &Node{Key: "count", Kind: NodeUint32}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			doc := NewDocument()
+			root := NewObjectNode("root")
+			root.Add(test.node)
+			doc.AddRoot(root)
+			var value struct {
+				Text  string `vdf:"text"`
+				Count uint32 `vdf:"count"`
+			}
+			if err := Unmarshal(doc, "root", &value); !errors.Is(err, ErrInvalidNodeState) {
+				t.Fatalf("Unmarshal(): error = %v, want ErrInvalidNodeState", err)
+			}
+		})
+	}
+}
+
+func TestUnmarshalBoolValues(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		value string
+		want  bool
+		valid bool
+	}{
+		{value: "1", want: true, valid: true},
+		{value: "TRUE", want: true, valid: true},
+		{value: "0", valid: true},
+		{value: "False", valid: true},
+		{value: "yes"},
+		{value: "2"},
+	}
+	for _, test := range tests {
+		t.Run(test.value, func(t *testing.T) {
+			doc, err := ParseString(`"root" { "value" "` + test.value + `" }`)
+			if err != nil {
+				t.Fatalf("ParseString(): %v", err)
+			}
+			var out struct {
+				Value bool `vdf:"value"`
+			}
+			err = Unmarshal(doc, "root", &out)
+			if !test.valid {
+				if !errors.Is(err, ErrReflectFieldMismatch) {
+					t.Fatalf("Unmarshal(): error = %v, want ErrReflectFieldMismatch", err)
+				}
+				return
+			}
+			if err != nil || out.Value != test.want {
+				t.Fatalf("Unmarshal() = (%v, %v), want (%v, nil)", out.Value, err, test.want)
+			}
+		})
+	}
+}
+
+// integerBounds returns the exact signed or unsigned range for an integer type.
+func integerBounds(fieldType reflect.Type) (*big.Int, *big.Int) {
+	bits := uint(fieldType.Bits())
+	one := big.NewInt(1)
+	max := new(big.Int).Lsh(new(big.Int).Set(one), bits)
+	max.Sub(max, one)
+	min := big.NewInt(0)
+
+	if fieldType.Kind() >= reflect.Int && fieldType.Kind() <= reflect.Int64 {
+		half := new(big.Int).Lsh(new(big.Int).Set(one), bits-1)
+		max.Sub(half, one)
+		min.Neg(half)
+	}
+
+	return min, max
+}
+
+// unmarshalReflectValue decodes one node into a dynamic struct field type.
+func unmarshalReflectValue(t *testing.T, fieldType reflect.Type, node *Node) (reflect.Value, error) {
+	t.Helper()
+	doc := NewDocument()
+	root := NewObjectNode("root")
+	root.Add(node)
+	doc.AddRoot(root)
+
+	structType := reflect.StructOf([]reflect.StructField{{
+		Name: "Value",
+		Type: fieldType,
+		Tag:  `vdf:"value"`,
+	}})
+	out := reflect.New(structType)
+	err := Unmarshal(doc, "root", out.Interface())
+	return out.Elem().Field(0), err
 }
 
 // customDate implements IsZero() bool to demonstrate omitzero with a custom type.

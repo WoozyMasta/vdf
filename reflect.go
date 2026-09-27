@@ -316,6 +316,10 @@ func marshalValue(key string, tag vdfTag, rv reflect.Value) ([]*Node, error) {
 // Unmarshal decodes the named root object from doc into the struct pointed to by out.
 // out must be a non-nil pointer to a struct.
 func Unmarshal(doc *Document, root string, out any) error {
+	if doc == nil {
+		return fmt.Errorf("%w: nil document", ErrInvalidNodeState)
+	}
+
 	rv := reflect.ValueOf(out)
 	if rv.Kind() != reflect.Pointer || rv.IsNil() {
 		return fmt.Errorf("%w: Unmarshal requires a non-nil pointer", ErrReflectUnsupportedType)
@@ -332,6 +336,9 @@ func Unmarshal(doc *Document, root string, out any) error {
 
 	if rootNode == nil {
 		return fmt.Errorf("%w: root key %q not found in document", ErrReflectFieldMismatch, root)
+	}
+	if err := validateNode(rootNode, make(map[*Node]struct{})); err != nil {
+		return fmt.Errorf("root %q: %w", root, err)
 	}
 
 	return unmarshalNode(rootNode, rv)
@@ -364,36 +371,47 @@ func unmarshalNode(node *Node, rv reflect.Value) error {
 		rv.SetString(*node.StringValue)
 
 	case reflect.Uint32:
-		return unmarshalUint(node, rv, 32)
+		return unmarshalUint(node, rv)
 
 	case reflect.Uint, reflect.Uint16:
-		return unmarshalUint(node, rv, 64)
+		return unmarshalUint(node, rv)
 
 	case reflect.Uint8:
-		return unmarshalUint(node, rv, 8)
+		return unmarshalUint(node, rv)
 
 	case reflect.Uint64:
-		return unmarshalUint(node, rv, 64)
+		return unmarshalUint(node, rv)
 
 	case reflect.Int, reflect.Int32, reflect.Int64:
-		return unmarshalInt(node, rv, 64)
+		return unmarshalInt(node, rv)
 
 	case reflect.Int8:
-		return unmarshalInt(node, rv, 8)
+		return unmarshalInt(node, rv)
 
 	case reflect.Int16:
-		return unmarshalInt(node, rv, 16)
+		return unmarshalInt(node, rv)
 
 	case reflect.Bool:
 		if node.Kind != NodeString {
 			return fmt.Errorf("%w: key %q expects string node for bool", ErrReflectFieldMismatch, node.Key)
 		}
-		rv.SetBool(*node.StringValue == "1" || strings.EqualFold(*node.StringValue, "true"))
+
+		switch value := *node.StringValue; {
+		case value == "1", strings.EqualFold(value, "true"):
+			rv.SetBool(true)
+
+		case value == "0", strings.EqualFold(value, "false"):
+			rv.SetBool(false)
+
+		default:
+			return fmt.Errorf("%w: key %q cannot parse bool %q", ErrReflectFieldMismatch, node.Key, value)
+		}
 
 	case reflect.Struct:
 		if node.Kind != NodeObject {
 			return fmt.Errorf("%w: key %q expects object node for struct", ErrReflectFieldMismatch, node.Key)
 		}
+
 		return unmarshalStruct(node, rv)
 
 	default:
@@ -403,7 +421,8 @@ func unmarshalNode(node *Node, rv reflect.Value) error {
 	return nil
 }
 
-func unmarshalUint(node *Node, rv reflect.Value, bits int) error {
+// unmarshalUint assigns a numeric node after checking the destination range.
+func unmarshalUint(node *Node, rv reflect.Value) error {
 	var v uint64
 	switch node.Kind {
 	case NodeUint32:
@@ -411,7 +430,7 @@ func unmarshalUint(node *Node, rv reflect.Value, bits int) error {
 
 	case NodeString:
 		var err error
-		v, err = strconv.ParseUint(*node.StringValue, 10, bits)
+		v, err = strconv.ParseUint(*node.StringValue, 10, 64)
 		if err != nil {
 			return fmt.Errorf("%w: key %q cannot parse uint: %v", ErrReflectFieldMismatch, node.Key, err)
 		}
@@ -420,11 +439,16 @@ func unmarshalUint(node *Node, rv reflect.Value, bits int) error {
 		return fmt.Errorf("%w: key %q expects uint32 or string node", ErrReflectFieldMismatch, node.Key)
 	}
 
+	if rv.OverflowUint(v) {
+		return fmt.Errorf("%w: key %q value %d overflows %s", ErrReflectFieldMismatch, node.Key, v, rv.Type())
+	}
+
 	rv.SetUint(v)
 	return nil
 }
 
-func unmarshalInt(node *Node, rv reflect.Value, bits int) error {
+// unmarshalInt assigns a numeric node after checking the destination range.
+func unmarshalInt(node *Node, rv reflect.Value) error {
 	var v int64
 	switch node.Kind {
 	case NodeUint32:
@@ -432,13 +456,17 @@ func unmarshalInt(node *Node, rv reflect.Value, bits int) error {
 
 	case NodeString:
 		var err error
-		v, err = strconv.ParseInt(*node.StringValue, 10, bits)
+		v, err = strconv.ParseInt(*node.StringValue, 10, 64)
 		if err != nil {
 			return fmt.Errorf("%w: key %q cannot parse int: %v", ErrReflectFieldMismatch, node.Key, err)
 		}
 
 	default:
 		return fmt.Errorf("%w: key %q expects uint32 or string node", ErrReflectFieldMismatch, node.Key)
+	}
+
+	if rv.OverflowInt(v) {
+		return fmt.Errorf("%w: key %q value %d overflows %s", ErrReflectFieldMismatch, node.Key, v, rv.Type())
 	}
 
 	rv.SetInt(v)

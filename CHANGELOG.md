@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning][].
   scalar leaves do not consume object depth.
 * Decoder modes reject reader reuse across AST and streaming paths;
   streaming errors are terminal and object-end events include their keys.
+* Reflection unmarshal rejects integer overflow and invalid boolean values,
+  and returns errors for nil documents and malformed scalar nodes.
 
 ## [0.2.1][] - 2026-06-24
 
