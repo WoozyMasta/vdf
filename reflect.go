@@ -540,14 +540,43 @@ func unmarshalStruct(node *Node, rv reflect.Value) error {
 			}
 
 			elemType := sliceType.Elem()
-			slice := reflect.MakeSlice(sliceType, 0, len(child.Children))
-			for i, c := range child.Children {
+			slice := reflect.MakeSlice(sliceType, len(child.Children), len(child.Children))
+			seen := make([]bool, len(child.Children))
+			for _, c := range child.Children {
+				index, err := strconv.Atoi(c.Key)
+				if err != nil || index < 0 || strconv.Itoa(index) != c.Key {
+					return fmt.Errorf(
+						"%w: indexed field %q has non-canonical index %q",
+						ErrReflectFieldMismatch, ft.Name, c.Key)
+				}
+				if index >= len(child.Children) {
+					return fmt.Errorf(
+						"%w: indexed field %q index %q is outside 0..%d",
+						ErrReflectFieldMismatch, ft.Name, c.Key, len(child.Children)-1)
+				}
+				if seen[index] {
+					return fmt.Errorf(
+						"%w: indexed field %q has duplicate index %q",
+						ErrReflectFieldMismatch, ft.Name, c.Key)
+				}
+
 				elem := reflect.New(elemType).Elem()
 				if err := unmarshalNode(c, elem); err != nil {
-					return fmt.Errorf("indexed field %q[%d]: %w", ft.Name, i, err)
+					return fmt.Errorf("indexed field %q[%d]: %w", ft.Name, index, err)
 				}
-				slice = reflect.Append(slice, elem)
+
+				slice.Index(index).Set(elem)
+				seen[index] = true
 			}
+
+			for index, exists := range seen {
+				if !exists {
+					return fmt.Errorf(
+						"%w: indexed field %q is missing index %d",
+						ErrReflectFieldMismatch, ft.Name, index)
+				}
+			}
+
 			fv.Set(slice)
 			continue
 		}

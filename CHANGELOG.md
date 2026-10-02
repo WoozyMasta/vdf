@@ -37,6 +37,8 @@ and this project adheres to [Semantic Versioning][].
   streaming errors are terminal and object-end events include their keys.
 * Reflection unmarshal rejects integer overflow and invalid boolean values,
   and returns errors for nil documents and malformed scalar nodes.
+* Indexed reflection slices decode by canonical numeric keys
+  and reject gaps, duplicates, and malformed indices.
 
 ## [0.2.1][] - 2026-06-24
 

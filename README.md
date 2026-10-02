@@ -133,7 +133,12 @@ Tag | Meaning
 `vdf:",omitzero"` | Omit if `IsZero() bool` is true, else reflect zero check
 `vdf:",inline"` | Hoist struct fields into the parent object
 `vdf:",repeated"` | Map `[]T` to multiple sibling nodes with the same key
-`vdf:",indexed"` | Map `[]T` to a child object with keys `"0"`, `"1"`, ...
+`vdf:",indexed"` | Map `[]T` to contiguous numeric keys `"0"`, `"1"`, ...
+
+Indexed slices decode by numeric key, regardless of source order.
+Keys must be canonical non-negative integers
+and form the contiguous range `0..N-1`;
+gaps, duplicates, and non-numeric keys are rejected.
 
 Fields implementing `encoding.TextMarshaler` / `TextUnmarshaler`
 are handled automatically.

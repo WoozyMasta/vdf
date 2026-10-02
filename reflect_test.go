@@ -41,6 +41,14 @@ type indexedStruct struct {
 	Items []string `vdf:"items,indexed"`
 }
 
+type indexedItem struct {
+	Name string `vdf:"name"`
+}
+
+type indexedNestedStruct struct {
+	Items []indexedItem `vdf:"items,indexed"`
+}
+
 type skipStruct struct {
 	Keep   string `vdf:"keep"`
 	Hidden string `vdf:"-"`
@@ -346,6 +354,81 @@ func TestUnmarshalIndexed(t *testing.T) {
 
 	if len(v.Items) != 2 || v.Items[0] != "x" || v.Items[1] != "y" {
 		t.Fatalf("Items = %v", v.Items)
+	}
+}
+
+func TestUnmarshalIndexedOutOfOrder(t *testing.T) {
+	t.Parallel()
+
+	doc, err := ParseString(`"root" { "items" { "1" "second" "0" "first" } }`)
+	if err != nil {
+		t.Fatalf("ParseString(): %v", err)
+	}
+
+	var value indexedStruct
+	if err := Unmarshal(doc, "root", &value); err != nil {
+		t.Fatalf("Unmarshal(): %v", err)
+	}
+	if !reflect.DeepEqual(value.Items, []string{"first", "second"}) {
+		t.Fatalf("Items = %v, want [first second]", value.Items)
+	}
+}
+
+func TestUnmarshalIndexedRejectsMalformedKeys(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		items string
+	}{
+		{name: "gap", items: `"0" "first" "2" "third"`},
+		{name: "duplicate index", items: `"0" "first" "0" "again"`},
+		{name: "non-numeric", items: `"zero" "first"`},
+		{name: "negative", items: `"-1" "first"`},
+		{name: "leading zero", items: `"00" "first"`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			doc, err := ParseString(`"root" { "items" { ` + test.items + ` } }`)
+			if err != nil {
+				t.Fatalf("ParseString(): %v", err)
+			}
+			var value indexedStruct
+			if err := Unmarshal(doc, "root", &value); !errors.Is(err, ErrReflectFieldMismatch) {
+				t.Fatalf("Unmarshal(): error = %v, want ErrReflectFieldMismatch", err)
+			}
+		})
+	}
+}
+
+func TestUnmarshalIndexedStructElementsAndRoundtrip(t *testing.T) {
+	t.Parallel()
+
+	input := `"root" { "items" { "1" { "name" "second" } "0" { "name" "first" } } }`
+	doc, err := ParseString(input)
+	if err != nil {
+		t.Fatalf("ParseString(): %v", err)
+	}
+	var nested indexedNestedStruct
+	if err := Unmarshal(doc, "root", &nested); err != nil {
+		t.Fatalf("Unmarshal(nested): %v", err)
+	}
+	wantNested := []indexedItem{{Name: "first"}, {Name: "second"}}
+	if !reflect.DeepEqual(nested.Items, wantNested) {
+		t.Fatalf("nested Items = %#v, want %#v", nested.Items, wantNested)
+	}
+
+	want := indexedStruct{Items: []string{"alpha", "beta", "gamma"}}
+	encoded, err := Marshal("root", want)
+	if err != nil {
+		t.Fatalf("Marshal(): %v", err)
+	}
+	var got indexedStruct
+	if err := Unmarshal(encoded, "root", &got); err != nil {
+		t.Fatalf("Unmarshal(roundtrip): %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("roundtrip = %#v, want %#v", got, want)
 	}
 }
 

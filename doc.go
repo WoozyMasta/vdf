@@ -90,6 +90,8 @@ and VDF Documents using struct field tags of the form vdf:"name,option":
 	_ = vdf.Unmarshal(doc, "Server", &s)
 
 Supported options: omitempty, inline, repeated, indexed.
+Indexed slices use canonical contiguous numeric keys and decode by index,
+regardless of the keys' source order.
 Fields implementing encoding.TextMarshaler/TextUnmarshaler are handled automatically.
 
 # Validation
