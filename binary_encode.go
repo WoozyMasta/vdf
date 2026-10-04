@@ -37,6 +37,10 @@ func encodeBinaryDocument(w io.Writer, doc *Document, opts EncodeOptions) error 
 
 // encodeBinaryNode writes a single AST node as binary entry.
 func encodeBinaryNode(w io.Writer, node *Node, opts EncodeOptions) error {
+	if node == nil {
+		return fmt.Errorf("%w: nil node", ErrInvalidNodeState)
+	}
+
 	switch node.Kind {
 	case NodeObject:
 		if err := writeBinaryByte(w, binaryTypeMapStart); err != nil {
@@ -61,6 +65,10 @@ func encodeBinaryNode(w io.Writer, node *Node, opts EncodeOptions) error {
 		return nil
 
 	case NodeString:
+		if node.StringValue == nil {
+			return fmt.Errorf("%w: nil string value for key %q", ErrInvalidNodeState, node.Key)
+		}
+
 		if err := writeBinaryByte(w, binaryTypeString); err != nil {
 			return err
 		}
@@ -69,23 +77,19 @@ func encodeBinaryNode(w io.Writer, node *Node, opts EncodeOptions) error {
 			return err
 		}
 
-		if node.StringValue == nil {
-			return fmt.Errorf("%w: nil string value for key %q", ErrInvalidNodeState, node.Key)
-		}
-
 		return writeNullTerminatedString(w, *node.StringValue)
 
 	case NodeUint32:
+		if node.Uint32Value == nil {
+			return fmt.Errorf("%w: nil uint32 value for key %q", ErrInvalidNodeState, node.Key)
+		}
+
 		if err := writeBinaryByte(w, binaryTypeNumber); err != nil {
 			return err
 		}
 
 		if err := writeNullTerminatedString(w, node.Key); err != nil {
 			return err
-		}
-
-		if node.Uint32Value == nil {
-			return fmt.Errorf("%w: nil uint32 value for key %q", ErrInvalidNodeState, node.Key)
 		}
 
 		var raw [4]byte
@@ -128,22 +132,21 @@ func writeNullTerminatedString(w io.Writer, value string) error {
 }
 
 // estimateBinaryDocumentSize returns an approximate encoded byte size.
-func estimateBinaryDocumentSize(doc *Document, deterministic bool) int {
+func estimateBinaryDocumentSize(doc *Document) int {
 	if doc == nil {
 		return 0
 	}
 
 	size := 1 // trailing root map-end byte
-	roots := orderedNodes(doc.Roots, deterministic)
-	for _, root := range roots {
-		size += estimateBinaryNodeSize(root, deterministic)
+	for _, root := range doc.Roots {
+		size += estimateBinaryNodeSize(root)
 	}
 
 	return size
 }
 
 // estimateBinaryNodeSize returns encoded byte size for one AST node.
-func estimateBinaryNodeSize(node *Node, deterministic bool) int {
+func estimateBinaryNodeSize(node *Node) int {
 	if node == nil {
 		return 0
 	}
@@ -152,12 +155,11 @@ func estimateBinaryNodeSize(node *Node, deterministic bool) int {
 
 	switch node.Kind {
 	case NodeObject:
-		children := orderedNodes(node.Children, deterministic)
-		for _, child := range children {
-			size += estimateBinaryNodeSize(child, deterministic)
+		for _, child := range node.Children {
+			size += estimateBinaryNodeSize(child)
 		}
-
 		size++ // object end byte
+
 	case NodeString:
 		if node.StringValue != nil {
 			size += len(*node.StringValue) + 1

@@ -39,6 +39,10 @@ and this project adheres to [Semantic Versioning][].
   and returns errors for nil documents and malformed scalar nodes.
 * Indexed reflection slices decode by canonical numeric keys
   and reject gaps, duplicates, and malformed indices.
+* Pointer-receiver `TextMarshaler` methods work
+  for unaddressable values through an addressable copy.
+* Encoder lifecycle and malformed-node errors are deterministic,
+  including empty manual binary document termination.
 
 ## [0.2.1][] - 2026-06-24
 

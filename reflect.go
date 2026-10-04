@@ -208,22 +208,11 @@ func marshalValue(key string, tag vdfTag, rv reflect.Value) ([]*Node, error) {
 		rv = rv.Elem()
 	}
 
-	// TextMarshaler via value receiver.
-	if rv.CanInterface() && rv.Type().Implements(textMarshalerType) {
-		text, err := rv.Interface().(encoding.TextMarshaler).MarshalText()
+	if node, ok, err := marshalTextValue(key, rv); ok || err != nil {
 		if err != nil {
-			return nil, fmt.Errorf("%w: TextMarshaler key %q: %v", ErrReflectUnsupportedType, key, err)
+			return nil, err
 		}
-		return []*Node{NewStringNode(key, string(text))}, nil
-	}
-
-	// TextMarshaler via pointer receiver.
-	if rv.CanAddr() && rv.Addr().Type().Implements(textMarshalerType) {
-		text, err := rv.Addr().Interface().(encoding.TextMarshaler).MarshalText()
-		if err != nil {
-			return nil, fmt.Errorf("%w: TextMarshaler key %q: %v", ErrReflectUnsupportedType, key, err)
-		}
-		return []*Node{NewStringNode(key, string(text))}, nil
+		return []*Node{node}, nil
 	}
 
 	switch rv.Kind() {
@@ -311,6 +300,41 @@ func marshalValue(key string, tag vdfTag, rv reflect.Value) ([]*Node, error) {
 	default:
 		return nil, fmt.Errorf("%w: unsupported kind %s for key %q", ErrReflectUnsupportedType, rv.Kind(), key)
 	}
+}
+
+// marshalTextValue invokes TextMarshaler with value-receiver precedence.
+func marshalTextValue(key string, rv reflect.Value) (*Node, bool, error) {
+	if rv.CanInterface() && rv.Type().Implements(textMarshalerType) {
+		text, err := rv.Interface().(encoding.TextMarshaler).MarshalText()
+		if err != nil {
+			return nil, true, fmt.Errorf("%w: TextMarshaler key %q: %v", ErrReflectUnsupportedType, key, err)
+		}
+
+		return NewStringNode(key, string(text)), true, nil
+	}
+
+	pointerType := reflect.PointerTo(rv.Type())
+	if !pointerType.Implements(textMarshalerType) {
+		return nil, false, nil
+	}
+
+	var pointer reflect.Value
+	if rv.CanAddr() {
+		pointer = rv.Addr()
+	} else {
+		pointer = reflect.New(rv.Type())
+		pointer.Elem().Set(rv)
+	}
+	if !pointer.CanInterface() {
+		return nil, true, fmt.Errorf("%w: TextMarshaler key %q is not accessible", ErrReflectUnsupportedType, key)
+	}
+
+	text, err := pointer.Interface().(encoding.TextMarshaler).MarshalText()
+	if err != nil {
+		return nil, true, fmt.Errorf("%w: TextMarshaler key %q: %v", ErrReflectUnsupportedType, key, err)
+	}
+
+	return NewStringNode(key, string(text)), true, nil
 }
 
 // Unmarshal decodes the named root object from doc into the struct pointed to by out.

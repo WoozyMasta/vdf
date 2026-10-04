@@ -12,13 +12,26 @@ import (
 	"strconv"
 )
 
+// encoderMode identifies the logical document operation selected by an encoder.
+type encoderMode uint8
+
+const (
+	// encoderModeUnused means no output operation has started.
+	encoderModeUnused encoderMode = iota
+	// encoderModeManual means manual streaming owns the encoder.
+	encoderModeManual
+	// encoderModeDocument means full-document encoding owns the encoder.
+	encoderModeDocument
+)
+
 // Encoder encodes VDF documents to an output stream.
 type Encoder struct {
-	w                    io.Writer     // Writer for the output.
-	opts                 EncodeOptions // Encode options.
-	manualDepth          int           // Current depth for manual streaming.
-	manualBinaryUsed     bool          // Whether binary mode is used for manual streaming.
-	manualBinaryFinished bool          // Whether binary mode is finished for manual streaming.
+	w           io.Writer     // Writer for the output.
+	writeErr    error         // Terminal error after output may have been partially written.
+	opts        EncodeOptions // Encode options.
+	manualDepth int           // Current depth for manual streaming.
+	mode        encoderMode   // Output mode selected by the first successful operation.
+	closed      bool          // Whether the logical document was finalized.
 }
 
 // NewEncoder creates a VDF encoder.
@@ -31,6 +44,13 @@ func NewEncoder(w io.Writer, opts EncodeOptions) *Encoder {
 
 // EncodeDocument encodes a complete document in selected output format.
 func (e *Encoder) EncodeDocument(doc *Document) error {
+	if err := e.available(); err != nil {
+		return err
+	}
+	if e.mode != encoderModeUnused {
+		return fmt.Errorf("%w: encoder already used for manual or full-document output", ErrInvalidNodeState)
+	}
+
 	if doc == nil {
 		return fmt.Errorf("%w: nil document", ErrInvalidNodeState)
 	}
@@ -50,117 +70,209 @@ func (e *Encoder) EncodeDocument(doc *Document) error {
 		}
 	}
 
-	switch format {
-	case FormatText:
-		return encodeTextDocument(e.w, doc, e.opts)
-
-	case FormatBinary:
-		return encodeBinaryDocument(e.w, doc, e.opts)
-
-	default:
+	if format != FormatText && format != FormatBinary {
 		return fmt.Errorf("%w: %d", ErrInvalidFormat, format)
 	}
+
+	e.mode = encoderModeDocument
+	var err error
+
+	switch format {
+	case FormatText:
+		err = encodeTextDocument(e.w, doc, e.opts)
+	case FormatBinary:
+		err = encodeBinaryDocument(e.w, doc, e.opts)
+	}
+	if err != nil {
+		return e.latchWriteError(err)
+	}
+
+	e.closed = true
+	return nil
 }
 
 // StartObject begins an object in manual streaming mode.
 func (e *Encoder) StartObject(key string) error {
-	switch e.manualFormat() {
+	format, err := e.beginManual()
+	if err != nil {
+		return err
+	}
+
+	e.mode = encoderModeManual
+
+	switch format {
 	case FormatText:
-		return e.startTextObject(key)
+		err = e.startTextObject(key)
 
 	case FormatBinary:
-		e.manualBinaryUsed = true
-		e.manualDepth++
-		if err := writeBinaryByte(e.w, binaryTypeMapStart); err != nil {
-			return err
+		if err = writeBinaryByte(e.w, binaryTypeMapStart); err == nil {
+			err = writeNullTerminatedString(e.w, key)
 		}
-		return writeNullTerminatedString(e.w, key)
+		if err == nil {
+			e.manualDepth++
+		}
 
 	default:
 		return fmt.Errorf("%w: %d", ErrInvalidFormat, e.opts.Format)
 	}
+
+	return e.latchWriteError(err)
 }
 
 // WriteString writes a string leaf in manual streaming mode.
 func (e *Encoder) WriteString(key, value string) error {
-	switch e.manualFormat() {
+	format, err := e.beginManual()
+	if err != nil {
+		return err
+	}
+
+	e.mode = encoderModeManual
+
+	switch format {
 	case FormatText:
-		return e.writeTextLeaf(key, value)
+		err = e.writeTextLeaf(key, value)
 
 	case FormatBinary:
-		e.manualBinaryUsed = true
-		if err := writeBinaryByte(e.w, binaryTypeString); err != nil {
-			return err
+		if err = writeBinaryByte(e.w, binaryTypeString); err == nil {
+			err = writeNullTerminatedString(e.w, key)
 		}
-		if err := writeNullTerminatedString(e.w, key); err != nil {
-			return err
+		if err == nil {
+			err = writeNullTerminatedString(e.w, value)
 		}
-		return writeNullTerminatedString(e.w, value)
 
 	default:
 		return fmt.Errorf("%w: %d", ErrInvalidFormat, e.opts.Format)
 	}
+
+	return e.latchWriteError(err)
 }
 
 // WriteUint32 writes an unsigned numeric leaf in manual streaming mode.
 func (e *Encoder) WriteUint32(key string, value uint32) error {
-	switch e.manualFormat() {
+	format, err := e.beginManual()
+	if err != nil {
+		return err
+	}
+
+	e.mode = encoderModeManual
+
+	switch format {
 	case FormatText:
-		return e.writeTextLeaf(key, strconv.FormatUint(uint64(value), 10))
+		err = e.writeTextLeaf(key, strconv.FormatUint(uint64(value), 10))
 
 	case FormatBinary:
-		e.manualBinaryUsed = true
-		if err := writeBinaryByte(e.w, binaryTypeNumber); err != nil {
-			return err
+		if err = writeBinaryByte(e.w, binaryTypeNumber); err == nil {
+			err = writeNullTerminatedString(e.w, key)
 		}
-		if err := writeNullTerminatedString(e.w, key); err != nil {
-			return err
+		if err == nil {
+			var raw [4]byte
+			binary.LittleEndian.PutUint32(raw[:], value)
+			_, err = e.w.Write(raw[:])
 		}
-
-		var raw [4]byte
-		binary.LittleEndian.PutUint32(raw[:], value)
-		_, err := e.w.Write(raw[:])
-		return err
 
 	default:
 		return fmt.Errorf("%w: %d", ErrInvalidFormat, e.opts.Format)
 	}
+
+	return e.latchWriteError(err)
 }
 
 // EndObject ends an object in manual streaming mode.
 func (e *Encoder) EndObject() error {
-	switch e.manualFormat() {
+	format, err := e.beginManual()
+	if err != nil {
+		return err
+	}
+	if e.manualDepth <= 0 {
+		return fmt.Errorf("%w: no open object", ErrInvalidNodeState)
+	}
+
+	e.mode = encoderModeManual
+
+	switch format {
 	case FormatText:
-		if e.manualDepth <= 0 {
-			return fmt.Errorf("%w: no open object", ErrInvalidNodeState)
-		}
-		e.manualDepth--
-		return e.endTextObject()
+		err = e.endTextObject()
 
 	case FormatBinary:
-		if e.manualDepth <= 0 {
-			return fmt.Errorf("%w: no open object", ErrInvalidNodeState)
-		}
-		e.manualDepth--
-		return writeBinaryByte(e.w, binaryTypeMapEnd)
+		err = writeBinaryByte(e.w, binaryTypeMapEnd)
 
 	default:
 		return fmt.Errorf("%w: %d", ErrInvalidFormat, e.opts.Format)
 	}
+
+	if err != nil {
+		return e.latchWriteError(err)
+	}
+
+	e.manualDepth--
+	return nil
 }
 
 // Close finalizes manual streaming state.
 func (e *Encoder) Close() error {
+	if err := e.available(); err != nil {
+		return err
+	}
+	if e.closed {
+		return nil
+	}
+	if e.mode == encoderModeDocument {
+		return fmt.Errorf("%w: full document already owns encoder", ErrInvalidNodeState)
+	}
+
 	if e.manualDepth != 0 {
 		return fmt.Errorf("%w: %d unclosed objects", ErrInvalidNodeState, e.manualDepth)
 	}
 
-	if e.manualFormat() != FormatBinary || !e.manualBinaryUsed || e.manualBinaryFinished {
-		return nil
+	format := e.manualFormat()
+	if format != FormatText && format != FormatBinary {
+		return fmt.Errorf("%w: %d", ErrInvalidFormat, e.opts.Format)
 	}
 
-	e.manualBinaryFinished = true
-	return writeBinaryByte(e.w, binaryTypeMapEnd)
+	e.mode = encoderModeManual
+	if format == FormatBinary {
+		if err := writeBinaryByte(e.w, binaryTypeMapEnd); err != nil {
+			return e.latchWriteError(err)
+		}
+	}
+
+	e.closed = true
+	return nil
+}
+
+// available returns the terminal writer error, if one was latched.
+func (e *Encoder) available() error {
+	if e.writeErr != nil {
+		return e.writeErr
+	}
+
+	return nil
+}
+
+// latchWriteError preserves an output error after a potentially partial write.
+func (e *Encoder) latchWriteError(err error) error {
+	if err != nil && e.writeErr == nil {
+		e.writeErr = err
+	}
+
+	return e.writeErr
+}
+
+// beginManual validates the encoder lifecycle and selects manual mode.
+func (e *Encoder) beginManual() (Format, error) {
+	if err := e.available(); err != nil {
+		return FormatAuto, err
+	}
+	if e.closed || e.mode == encoderModeDocument {
+		return FormatAuto, fmt.Errorf("%w: encoder is finalized or used for full-document output", ErrInvalidNodeState)
+	}
+
+	format := e.manualFormat()
+	if format != FormatText && format != FormatBinary {
+		return FormatAuto, fmt.Errorf("%w: %d", ErrInvalidFormat, e.opts.Format)
+	}
+
+	return format, nil
 }
 
 // Write encodes document as text VDF with default options.
@@ -224,11 +336,21 @@ func AppendText(dst []byte, doc *Document, opts EncodeOptions) ([]byte, error) {
 
 // AppendBinary appends binary VDF output to destination byte slice.
 func AppendBinary(dst []byte, doc *Document, opts EncodeOptions) ([]byte, error) {
-	extra := estimateBinaryDocumentSize(doc, opts.Deterministic)
+	if doc == nil {
+		return nil, fmt.Errorf("%w: nil document", ErrInvalidNodeState)
+	}
+	if opts.Validate {
+		if err := doc.Validate(); err != nil {
+			return nil, err
+		}
+	}
+
+	extra := estimateBinaryDocumentSize(doc)
 	dst = reserveAppendCapacity(dst, extra)
 
 	writer := &sliceWriter{buf: dst}
 	opts.Format = FormatBinary
+	opts.Validate = false
 
 	if err := NewEncoder(writer, opts).EncodeDocument(doc); err != nil {
 		return nil, err

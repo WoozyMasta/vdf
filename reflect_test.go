@@ -49,6 +49,42 @@ type indexedNestedStruct struct {
 	Items []indexedItem `vdf:"items,indexed"`
 }
 
+// pointerTextMarshaler implements TextMarshaler only through its pointer type.
+type pointerTextMarshaler struct {
+	Value string // Value serialized by MarshalText.
+}
+
+// MarshalText returns the wrapped value with a pointer-specific prefix.
+func (v *pointerTextMarshaler) MarshalText() ([]byte, error) {
+	return []byte("pointer:" + v.Value), nil
+}
+
+// pointerTextMarshalerContainer exercises addressability across field shapes.
+type pointerTextMarshalerContainer struct {
+	Field    pointerTextMarshaler            `vdf:"field"`             // Value field.
+	Map      map[string]pointerTextMarshaler `vdf:"values"`            // Map values.
+	Repeated []pointerTextMarshaler          `vdf:"repeated,repeated"` // Repeated slice elements.
+	Indexed  []pointerTextMarshaler          `vdf:"indexed,indexed"`   // Indexed slice elements.
+	Omitted  *pointerTextMarshaler           `vdf:"omitted"`           // Nil pointer omission.
+}
+
+// mutatingPointerTextMarshaler checks that fallback addressability uses a copy.
+type mutatingPointerTextMarshaler struct {
+	Value string // Value serialized before the receiver mutates it.
+}
+
+// MarshalText mutates the receiver to expose accidental writes to map values.
+func (v *mutatingPointerTextMarshaler) MarshalText() ([]byte, error) {
+	text := []byte(v.Value)
+	v.Value = "mutated"
+	return text, nil
+}
+
+// mutatingMapContainer supplies an unaddressable map value to Marshal.
+type mutatingMapContainer struct {
+	Values map[string]mutatingPointerTextMarshaler `vdf:"values"` // Input map.
+}
+
 type skipStruct struct {
 	Keep   string `vdf:"keep"`
 	Hidden string `vdf:"-"`
@@ -231,6 +267,89 @@ func TestMarshalTextMarshaler(t *testing.T) {
 	node := doc.Roots[0].First("field")
 	if node == nil || *node.StringValue != "TM:hello" {
 		t.Fatalf("field = %v, want %q", node, "TM:hello")
+	}
+}
+
+func TestMarshalPointerTextMarshalerAddressability(t *testing.T) {
+	t.Parallel()
+
+	value := pointerTextMarshalerContainer{
+		Field:    pointerTextMarshaler{Value: "field"},
+		Map:      map[string]pointerTextMarshaler{"entry": {Value: "map"}},
+		Repeated: []pointerTextMarshaler{{Value: "first"}, {Value: "second"}},
+		Indexed:  []pointerTextMarshaler{{Value: "zero"}, {Value: "one"}},
+	}
+	byValue, err := Marshal("root", value)
+	if err != nil {
+		t.Fatalf("Marshal(value): %v", err)
+	}
+	byPointer, err := Marshal("root", &value)
+	if err != nil {
+		t.Fatalf("Marshal(pointer): %v", err)
+	}
+	if !reflect.DeepEqual(byValue, byPointer) {
+		t.Fatalf("Marshal(value) = %#v, Marshal(pointer) = %#v", byValue, byPointer)
+	}
+
+	root := byValue.Roots[0]
+	assertString := func(key, want string) {
+		t.Helper()
+		node := root.First(key)
+		if node == nil || node.StringValue == nil || *node.StringValue != want {
+			t.Fatalf("%s = %#v, want %q", key, node, want)
+		}
+	}
+	assertString("field", "pointer:field")
+	if node := root.First("values"); node == nil ||
+		node.First("entry") == nil ||
+		node.First("entry").StringValue == nil ||
+		*node.First("entry").StringValue != "pointer:map" {
+		t.Fatalf("map value node = %#v, want pointer:map", node)
+	}
+
+	repeated := root.All("repeated")
+	if len(repeated) != 2 ||
+		repeated[0].StringValue == nil ||
+		*repeated[0].StringValue != "pointer:first" ||
+		repeated[1].StringValue == nil ||
+		*repeated[1].StringValue != "pointer:second" {
+		t.Fatalf("repeated values = %#v, want [pointer:first pointer:second]", repeated)
+	}
+
+	indexed := root.First("indexed")
+	if indexed == nil ||
+		indexed.First("0") == nil ||
+		indexed.First("0").StringValue == nil ||
+		*indexed.First("0").StringValue != "pointer:zero" ||
+		indexed.First("1") == nil || indexed.First("1").StringValue == nil ||
+		*indexed.First("1").StringValue != "pointer:one" {
+		t.Fatalf("indexed values = %#v, want pointer:zero and pointer:one", indexed)
+	}
+	if root.First("omitted") != nil {
+		t.Fatal("nil pointer TextMarshaler field should be omitted")
+	}
+}
+
+func TestMarshalPointerTextMarshalerDoesNotMutateMapValue(t *testing.T) {
+	t.Parallel()
+
+	value := mutatingMapContainer{
+		Values: map[string]mutatingPointerTextMarshaler{"entry": {Value: "original"}},
+	}
+	doc, err := Marshal("root", value)
+	if err != nil {
+		t.Fatalf("Marshal(): %v", err)
+	}
+	if got := value.Values["entry"].Value; got != "original" {
+		t.Fatalf("map value after Marshal = %q, want unchanged value", got)
+	}
+	values := doc.Roots[0].First("values")
+	if values == nil {
+		t.Fatal("values map node missing")
+	}
+	node := values.First("entry")
+	if node == nil || node.StringValue == nil || *node.StringValue != "original" {
+		t.Fatalf("map value node = %#v, want original", node)
 	}
 }
 

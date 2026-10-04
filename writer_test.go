@@ -8,6 +8,23 @@ import (
 	"testing"
 )
 
+// failOnWriteWriter returns a configured error on one write call.
+type failOnWriteWriter struct {
+	writes int   // Number of writes received.
+	failAt int   // Write call that should fail.
+	err    error // Error returned by the failing write.
+}
+
+// Write counts calls and fails at the configured structural write.
+func (w *failOnWriteWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes == w.failAt {
+		return 0, w.err
+	}
+
+	return len(p), nil
+}
+
 func TestWriteStringRoundtripFixture(t *testing.T) {
 	t.Parallel()
 
@@ -196,6 +213,185 @@ func TestEncodeDocumentValidateOption(t *testing.T) {
 	if !errors.Is(err, ErrInvalidNodeState) {
 		t.Fatalf("AppendText(validate=true) error = %v, want ErrInvalidNodeState", err)
 	}
+}
+
+func TestEncodeNilNodesWithoutValidation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		format Format
+		roots  []*Node
+	}{
+		{
+			name:   "text nil root",
+			format: FormatText,
+			roots:  []*Node{nil}},
+		{
+			name:   "binary nil root",
+			format: FormatBinary,
+			roots:  []*Node{nil}},
+		{
+			name:   "text nil child",
+			format: FormatText,
+			roots:  []*Node{{Key: "root", Kind: NodeObject, Children: []*Node{nil}}},
+		},
+		{
+			name:   "binary nil child",
+			format: FormatBinary,
+			roots:  []*Node{{Key: "root", Kind: NodeObject, Children: []*Node{nil}}},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			doc := &Document{Format: test.format, Roots: test.roots}
+			var err error
+			if test.format == FormatText {
+				_, err = AppendText(nil, doc, EncodeOptions{Validate: false})
+			} else {
+				_, err = AppendBinary(nil, doc, EncodeOptions{Validate: false})
+			}
+			if !errors.Is(err, ErrInvalidNodeState) {
+				t.Fatalf("encode error = %v, want ErrInvalidNodeState", err)
+			}
+		})
+	}
+}
+
+func TestAppendBinaryValidatesBeforeEstimating(t *testing.T) {
+	t.Parallel()
+
+	root := NewObjectNode("root")
+	root.Children = append(root.Children, root)
+	doc := &Document{Roots: []*Node{root}}
+	_, err := AppendBinary(nil, doc, EncodeOptions{Validate: true})
+	if !errors.Is(err, ErrInvalidNodeState) {
+		t.Fatalf("AppendBinary(cyclic doc, validate=true) error = %v, want ErrInvalidNodeState", err)
+	}
+}
+
+func TestManualEncoderLifecycle(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty binary close writes terminator", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		enc := NewEncoder(&buf, EncodeOptions{Format: FormatBinary})
+		if err := enc.Close(); err != nil {
+			t.Fatalf("Close(): %v", err)
+		}
+		if !bytes.Equal(buf.Bytes(), []byte{binaryTypeMapEnd}) {
+			t.Fatalf("Close() output = %v, want [%#02x]", buf.Bytes(), binaryTypeMapEnd)
+		}
+	})
+
+	t.Run("close is idempotent and rejects later writes", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		enc := NewEncoder(&buf, EncodeOptions{Format: FormatText})
+		if err := enc.WriteString("key", "value"); err != nil {
+			t.Fatalf("WriteString(): %v", err)
+		}
+		if err := enc.Close(); err != nil {
+			t.Fatalf("Close(): %v", err)
+		}
+		before := buf.String()
+		if err := enc.Close(); err != nil {
+			t.Fatalf("second Close(): %v", err)
+		}
+		if got := buf.String(); got != before {
+			t.Fatalf("second Close() changed output to %q, want %q", got, before)
+		}
+		if err := enc.WriteString("later", "value"); !errors.Is(err, ErrInvalidNodeState) {
+			t.Fatalf("WriteString() after Close() error = %v, want ErrInvalidNodeState", err)
+		}
+		if err := enc.StartObject("later"); !errors.Is(err, ErrInvalidNodeState) {
+			t.Fatalf("StartObject() after Close() error = %v, want ErrInvalidNodeState", err)
+		}
+		if err := enc.EndObject(); !errors.Is(err, ErrInvalidNodeState) {
+			t.Fatalf("EndObject() after Close() error = %v, want ErrInvalidNodeState", err)
+		}
+	})
+
+	t.Run("manual and full document modes cannot mix", func(t *testing.T) {
+		t.Parallel()
+		doc := NewDocument()
+		var manualFirst bytes.Buffer
+		enc := NewEncoder(&manualFirst, EncodeOptions{Format: FormatText})
+		if err := enc.WriteString("key", "value"); err != nil {
+			t.Fatalf("WriteString(): %v", err)
+		}
+		if err := enc.EncodeDocument(doc); !errors.Is(err, ErrInvalidNodeState) {
+			t.Fatalf("EncodeDocument after manual write error = %v, want ErrInvalidNodeState", err)
+		}
+
+		var documentFirst bytes.Buffer
+		enc = NewEncoder(&documentFirst, EncodeOptions{Format: FormatText})
+		if err := enc.EncodeDocument(doc); err != nil {
+			t.Fatalf("EncodeDocument(): %v", err)
+		}
+		if err := enc.WriteString("key", "value"); !errors.Is(err, ErrInvalidNodeState) {
+			t.Fatalf("WriteString after EncodeDocument error = %v, want ErrInvalidNodeState", err)
+		}
+		if err := enc.EncodeDocument(doc); !errors.Is(err, ErrInvalidNodeState) {
+			t.Fatalf("repeated EncodeDocument error = %v, want ErrInvalidNodeState", err)
+		}
+	})
+}
+
+func TestManualEncoderLatchesStructuralWriterError(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("structural write failed")
+	w := &failOnWriteWriter{failAt: 4, err: wantErr}
+	enc := NewEncoder(w, EncodeOptions{Format: FormatBinary})
+	if err := enc.StartObject("root"); err != nil {
+		t.Fatalf("StartObject(): %v", err)
+	}
+	if enc.manualDepth != 1 {
+		t.Fatalf("manualDepth after StartObject() = %d, want 1", enc.manualDepth)
+	}
+
+	err := enc.EndObject()
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("EndObject() error = %v, want %v", err, wantErr)
+	}
+	if enc.manualDepth != 1 {
+		t.Fatalf("manualDepth after failed EndObject() = %d, want 1", enc.manualDepth)
+	}
+	if got := enc.EndObject(); got != err {
+		t.Fatalf("repeated EndObject() error = %v, want latched error %v", got, err)
+	}
+	if got := enc.Close(); got != err {
+		t.Fatalf("Close() after writer failure = %v, want latched error %v", got, err)
+	}
+}
+
+func TestEncodeDocumentLatchesWriterError(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("write failed")
+	w := writerFunc(func(p []byte) (int, error) { return 0, wantErr })
+	enc := NewEncoder(w, EncodeOptions{Format: FormatText})
+	doc := NewDocument()
+	doc.AddRoot(NewObjectNode("root"))
+	if err := enc.EncodeDocument(doc); !errors.Is(err, wantErr) {
+		t.Fatalf("EncodeDocument() error = %v, want %v", err, wantErr)
+	}
+	if err := enc.EncodeDocument(doc); err == nil || !errors.Is(err, wantErr) {
+		t.Fatalf("repeated EncodeDocument() error = %v, want latched %v", err, wantErr)
+	}
+}
+
+// writerFunc adapts a function to io.Writer for focused I/O failure tests.
+type writerFunc func([]byte) (int, error)
+
+// Write invokes the adapted writer function.
+func (f writerFunc) Write(p []byte) (int, error) {
+	return f(p)
 }
 
 func TestManualEncoderCloseUnclosed(t *testing.T) {

@@ -110,6 +110,10 @@ func encodeTextDocument(w io.Writer, doc *Document, opts EncodeOptions) error {
 // encodeTextNode writes one AST node in text VDF format.
 // indent is the current indentation prefix (accumulated by callers).
 func encodeTextNode(w io.Writer, node *Node, opts EncodeOptions, indent string) error {
+	if node == nil {
+		return fmt.Errorf("%w: nil node", ErrInvalidNodeState)
+	}
+
 	switch node.Kind {
 	case NodeObject:
 		if opts.Compact {
