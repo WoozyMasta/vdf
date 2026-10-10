@@ -6,6 +6,7 @@ package vdf
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 )
 
@@ -155,6 +156,82 @@ func TestFromMapSortedVsFromMap(t *testing.T) {
 
 	if keys[0] != "a" || keys[1] != "b" || keys[2] != "c" {
 		t.Fatalf("sorted keys = %v, want [a b c]", keys)
+	}
+}
+
+func TestFromMapSortedRecursively(t *testing.T) {
+	t.Parallel()
+
+	m := Map{
+		"z-root": "last",
+		"a-root": Map{
+			"z-level1": "last",
+			"c-level1": "middle",
+			"a-level1": map[string]any{
+				"z-level2": "last",
+				"c-level2": "middle",
+				"a-level2": "first",
+				"y-level2": "later",
+				"b-level2": "second",
+				"x-level2": "later",
+			},
+			"y-level1": "later",
+			"b-level1": "second",
+			"x-level1": "later",
+		},
+		"m-root": map[string]any{
+			"z-branch": Map{
+				"z-leaf": "last",
+				"a-leaf": "first",
+				"m-leaf": "middle",
+				"b-leaf": "second",
+				"x-leaf": "later",
+				"c-leaf": "third",
+			},
+			"a-branch": "first",
+			"m-branch": "middle",
+			"b-branch": "second",
+			"x-branch": "later",
+			"c-branch": "third",
+		},
+		"y-root": "later",
+		"b-root": "second",
+		"x-root": "later",
+		"c-root": "third",
+	}
+
+	doc, err := FromMapSorted("root", m)
+	if err != nil {
+		t.Fatalf("FromMapSorted() error: %v", err)
+	}
+	assertKeys := func(node *Node, want []string) {
+		t.Helper()
+		got := make([]string, len(node.Children))
+		for i, child := range node.Children {
+			got[i] = child.Key
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("children keys = %v, want %v", got, want)
+		}
+	}
+
+	root := doc.Roots[0]
+	assertKeys(root, []string{"a-root", "b-root", "c-root", "m-root", "x-root", "y-root", "z-root"})
+	level1 := root.First("a-root")
+	assertKeys(level1, []string{"a-level1", "b-level1", "c-level1", "x-level1", "y-level1", "z-level1"})
+	level2 := level1.First("a-level1")
+	assertKeys(level2, []string{"a-level2", "b-level2", "c-level2", "x-level2", "y-level2", "z-level2"})
+	branch := root.First("m-root").First("z-branch")
+	assertKeys(branch, []string{"a-leaf", "b-leaf", "c-leaf", "m-leaf", "x-leaf", "z-leaf"})
+
+	for i := 0; i < 5; i++ {
+		repeated, err := FromMapSorted("root", m)
+		if err != nil {
+			t.Fatalf("FromMapSorted() repeated call %d: %v", i, err)
+		}
+		if !reflect.DeepEqual(repeated, doc) {
+			t.Fatalf("FromMapSorted() repeated call %d produced different AST", i)
+		}
 	}
 }
 

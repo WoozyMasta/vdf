@@ -161,27 +161,17 @@ func (d *Document) ToMapLossy() Map {
 	return out
 }
 
-// FromMapSorted builds a document with one object root from a map with keys sorted.
-// Unlike FromMap, key iteration order is deterministic (lexicographic).
+// FromMapSorted builds a document with one object root
+// from a map with keys sorted lexicographically at every nesting level.
 func FromMapSorted(rootKey string, m Map) (*Document, error) {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-
-	slices.SortFunc(keys, cmp.Compare)
-
 	doc := NewDocumentWithFormat(FormatAuto)
 	root := NewObjectNode(rootKey)
 
-	for _, key := range keys {
-		node, err := mapValueToNode(key, m[key])
-		if err != nil {
-			return nil, err
-		}
-
-		root.Children = append(root.Children, node)
+	children, err := mapToNodeChildren(m, true)
+	if err != nil {
+		return nil, err
 	}
+	root.Children = append(root.Children, children...)
 
 	doc.AddRoot(root)
 
@@ -197,7 +187,7 @@ func FromMap(rootKey string, m Map) (*Document, error) {
 	doc := NewDocumentWithFormat(FormatAuto)
 	root := NewObjectNode(rootKey)
 
-	children, err := mapToNodeChildren(m)
+	children, err := mapToNodeChildren(m, false)
 	if err != nil {
 		return nil, err
 	}
@@ -312,23 +302,46 @@ func nodeToLossyValue(node *Node) any {
 	}
 }
 
-// mapToNodeChildren converts map entries to ordered node children.
-func mapToNodeChildren(m Map) ([]*Node, error) {
+// mapToNodeChildren converts map entries to node children, optionally sorted.
+func mapToNodeChildren(m Map, deterministic bool) ([]*Node, error) {
 	children := make([]*Node, 0, len(m))
-	for key, value := range m {
-		node, err := mapValueToNode(key, value)
+	appendNode := func(key string, value any) error {
+		node, err := mapValueToNode(key, value, deterministic)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		children = append(children, node)
+		return nil
+	}
+
+	if !deterministic {
+		for key, value := range m {
+			if err := appendNode(key, value); err != nil {
+				return nil, err
+			}
+		}
+
+		return children, nil
+	}
+
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	slices.SortFunc(keys, cmp.Compare)
+
+	for _, key := range keys {
+		if err := appendNode(key, m[key]); err != nil {
+			return nil, err
+		}
 	}
 
 	return children, nil
 }
 
-// mapValueToNode converts a single map value to a node.
-func mapValueToNode(key string, value any) (*Node, error) {
+// mapValueToNode converts a single map value to a node recursively.
+func mapValueToNode(key string, value any, deterministic bool) (*Node, error) {
 	switch val := value.(type) {
 	case string:
 		return NewStringNode(key, val), nil
@@ -353,15 +366,16 @@ func mapValueToNode(key string, value any) (*Node, error) {
 
 	case Map:
 		obj := NewObjectNode(key)
-		children, err := mapToNodeChildren(val)
+		children, err := mapToNodeChildren(val, deterministic)
 		if err != nil {
 			return nil, err
 		}
+
 		obj.Children = append(obj.Children, children...)
 		return obj, nil
 
 	case map[string]any:
-		return mapValueToNode(key, Map(val))
+		return mapValueToNode(key, Map(val), deterministic)
 
 	case float64:
 		if val < 0 || val > math.MaxUint32 || val != math.Trunc(val) {

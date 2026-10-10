@@ -43,6 +43,7 @@ and this project adheres to [Semantic Versioning][].
   for unaddressable values through an addressable copy.
 * Encoder lifecycle and malformed-node errors are deterministic,
   including empty manual binary document termination.
+* `FromMapSorted` sorts nested maps lexicographically at every level.
 
 ## [0.2.1][] - 2026-06-24
 
