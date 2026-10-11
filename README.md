@@ -1,236 +1,101 @@
 # vdf
 
-This project provides a high performance implementation of
-Valve Data Format (VDF) text and binary formats.  
-It is built around `io.Reader` and `io.Writer` for streaming workloads,
-keeps an explicit AST (`Document` and `Node`) as the canonical model,
-preserves node order and duplicate keys,
-and includes low allocation byte slice encode paths.
+[vdf] is a Go library for working with Valve Data Format (VDF),
+the configuration and data format used by Valve games and tools.
+It reads, edits, and writes VDF while keeping the original key order
+and duplicate keys in an ordered document tree.
+This makes it useful for game tools and config converters
+that need to preserve details ordinary maps cannot represent.
 
-Full API reference: <https://pkg.go.dev/github.com/woozymasta/vdf>
+The package supports VDF text and a documented subset of the binary format,
+as well as mapping between VDF documents and Go structs.
 
-## Install
+## When to use it
 
-```shell
-go get github.com/woozymasta/vdf
+Use `vdf` when a Go program needs to inspect
+or update existing Valve data, generate configuration files,
+or exchange VDF with another tool while preserving ordering and repeated keys.
+
+## Installation
+
+Add the dependency with:
+
+```sh
+go get github.com/woozymasta/vdf@latest
 ```
 
-## Reading VDF
+## Use
 
-Use `ParseString`, `ParseBytes`, or `NewDecoder` depending on your input source.
-
-```go
-doc, err := vdf.ParseString(`"root" { "name" "srv" }`)
-if err != nil {
-    return err
-}
-
-root := doc.Roots[0]
-name := root.First("name")
-```
-
-Use auto format detection when input may be text or binary:
+Read a value from VDF text:
 
 ```go
-doc, err := vdf.ParseAuto(data)
-if err != nil {
-    return err
-}
-```
+func read() error {
+    doc, err := vdf.ParseString(`"server" { "name" "dayz" }`)
+    if err != nil {
+        return err
+    }
 
-For file inputs, use `ParseFile` with optional options or convenience wrappers:
-`ParseTextFile` and `ParseAutoFile`.
-
-## Writing VDF
-
-For full document encode, use `WriteString`, `AppendText`, `AppendBinary`, or `NewEncoder`.
-
-```go
-out, err := vdf.WriteString(doc)
-if err != nil {
-    return err
+    fmt.Println(*doc.Roots[0].First("name").StringValue)
+    return nil
 }
 ```
 
-For binary output with low allocations:
+Build a document and write it as VDF text:
 
 ```go
-bin, err := vdf.AppendBinary(nil, doc, vdf.EncodeOptions{
-    Format: vdf.FormatBinary,
-})
-if err != nil {
-    return err
+func write() error {
+    doc, err := vdf.NewBuilder("server").Set("name", "dayz").Document()
+    if err != nil {
+        return err
+    }
+
+    text, err := vdf.WriteString(doc)
+    if err != nil {
+        return err
+    }
+
+    fmt.Print(text)
+    return nil
 }
 ```
 
-If strict AST checks are required before encoding:
+## Struct mapping
 
-```go
-enc := vdf.NewEncoder(w, vdf.EncodeOptions{
-    Format:   vdf.FormatText,
-    Validate: true,
-})
-err := enc.EncodeDocument(doc)
-```
-
-For file output, use `WriteFile` with optional options or convenience wrappers:
-`WriteTextFile` and `WriteBinaryFile`.
-
-## Building a VDF document
-
-### Fluent Builder
-
-`NewBuilder` provides a safe, ordered API for constructing documents:
-
-```go
-doc, err := vdf.NewBuilder("settings").
-    Set("name", "demo").
-    SetUint32("port", 2302).
-    Object("auth", func(b *vdf.Builder) {
-        b.Set("token", "abc123")
-    }).
-    Document()
-```
-
-### Manual construction
-
-```go
-doc := vdf.NewDocumentWithFormat(vdf.FormatText)
-root := vdf.NewObjectNode("settings")
-root.Add(vdf.NewStringNode("name", "demo"))
-root.Add(vdf.NewUint32Node("port", 2302))
-doc.AddRoot(root)
-```
-
-`NodeObject` keeps ordered children and allows duplicate keys.
-This matches real VDF behavior.
-
-## Reflection API
-
-Use `Marshal` and `Unmarshal` to convert between Go structs and VDF documents.
-
-```go
-type Server struct {
-    Name string `vdf:"name"`
-    Port uint32 `vdf:"port"`
-}
-
-// Encode
-doc, err := vdf.Marshal("Server", Server{Name: "game-1", Port: 2302})
-
-// Decode
-var s Server
-err = vdf.Unmarshal(doc, "Server", &s)
-```
-
-### Struct tags
+`vdf` maps exported Go struct fields to VDF keys.
+The `vdf` tag controls the key name and how a field is represented:
 
 Tag | Meaning
---- | -------
-`vdf:"name"` | Use `name` as the VDF key
-`vdf:"-"` | Skip this field
-`vdf:",omitempty"` | Omit if `reflect.Value.IsZero()` is true
-`vdf:",omitzero"` | Omit if `IsZero() bool` is true, else reflect zero check
-`vdf:",inline"` | Hoist struct fields into the parent object
-`vdf:",repeated"` | Map `[]T` to multiple sibling nodes with the same key
-`vdf:",indexed"` | Map `[]T` to contiguous numeric keys `"0"`, `"1"`, ...
+--- | ---
+`vdf:"name"` | Use `name` as the VDF key.
+`vdf:"-"` | Skip the field.
+`vdf:",omitempty"` | Omit the field when its Go value is zero.
+`vdf:",omitzero"` | Omit if `IsZero()` is true; else if the value is zero.
+`vdf:",inline"` | Place the struct's fields in the parent object.
+`vdf:",repeated"` | Write a slice as repeated sibling keys.
+`vdf:",indexed"` | Encode a slice under numeric object keys (`"0"`, `"1"`, ...).
 
-Indexed slices decode by numeric key, regardless of source order.
-Keys must be canonical non-negative integers
-and form the contiguous range `0..N-1`;
-gaps, duplicates, and non-numeric keys are rejected.
+Indexed slices decode by key index, regardless of source order.
+Keys must be canonical non-negative integers forming contiguous range `0..N-1`.
+Fields implementing `encoding.TextMarshaler` or `encoding.TextUnmarshaler`
+use those interfaces for scalar conversion.
 
-Fields implementing `encoding.TextMarshaler` / `TextUnmarshaler`
-are handled automatically.
+## Compatibility
 
-## Streaming traversal
+* Text keys and values may be quoted or unquoted.
+  Supported escapes are `\\`, `\"`, `\n`, `\t`, and `\r`.
+  Line comments are supported; block comments are not.
+* Binary support covers objects (`0x00`), strings (`0x01`),
+  and `uint32` values (`0x02`, little-endian).
+  Strings are NUL-terminated and documents end with `0x08`.
+  Other Valve binary types are not supported.
+* Decode `FormatAuto` selects binary when the first byte
+  is `0x00`, `0x01`, `0x02`, or `0x08`;
+  empty input and other first bytes are treated as text.
+  Encode `FormatAuto` follows the document's text or binary format,
+  and uses text when the document format is also automatic.
+* Documents preserve duplicate keys and their order.
+  Strict decoding rejects duplicates.
 
-Two event-based APIs are available.  
-Both return events of type `EventType`:
-`EventDocumentStart`, `EventObjectStart`, `EventObjectEnd`, `EventString`,
-`EventUint32`, `EventDocumentEnd`.
+<!-- links -->
 
-### WalkEvents - AST-based traversal
-
-Decodes the full document into an AST on the first call,
-then traverses it in DFS order.
-Use when you need the parsed document available after iteration.
-
-```go
-dec := vdf.NewDecoder(r, vdf.DecodeOptions{Format: vdf.FormatAuto})
-for {
-    ev, err := dec.WalkEvents()
-    if err != nil {
-        break
-    }
-    _ = ev
-}
-```
-
-### NextEvent - true streaming
-
-Yields events directly from the reader without building an AST.
-Suitable for large inputs where keeping
-the full document in memory is undesirable.
-
-```go
-dec := vdf.NewDecoder(r, vdf.DecodeOptions{Format: vdf.FormatAuto})
-for {
-    ev, err := dec.NextEvent()
-    if err != nil {
-        break
-    }
-    _ = ev
-}
-```
-
-`WalkEvents` and `NextEvent` are mutually exclusive
-on the same `Decoder` instance.
-Mixing them returns `ErrInvalidNodeState`.
-
-## Security limits
-
-Use `DecodeOptions` to cap memory usage when parsing untrusted input:
-
-```go
-doc, err := vdf.ParseBytes(data, vdf.DecodeOptions{
-    Format:         vdf.FormatAuto,
-    MaxDepth:       32,
-    MaxNodes:       10_000,
-    MaxStringBytes: 4096, // ceiling for both keys and values
-    MaxKeyBytes:    256,  // per-key limit (overrides MaxStringBytes keys)
-    MaxValueBytes:  4096, // per-value limit (overrides MaxStringBytes values)
-})
-```
-
-All limits use 0 to mean unlimited (the default).
-`MaxDepth` counts nested object scopes:
-the root object has depth 1, while scalar leaves do not increase
-object depth.
-`Event.Depth` reports traversal depth,
-so a scalar directly inside the root object
-has event depth 2 even when `MaxDepth` is 1.
-
-## Compatibility notes
-
-* **Text format** - keys and values may be quoted or unquoted.
-  Escape sequences `\\`, `\"`, `\n`, `\t`, `\r` are supported.
-  Line comments (`// ...`) are supported;
-  block comments (`/* ... */`) are not.
-* **Binary format** - little-endian uint32, null-terminated C strings.
-  Type bytes:
-  * `0x00` object start
-  * `0x01` string
-  * `0x02` uint32
-  * `0x08` object end
-* **Auto-detection** - `FormatAuto` checks the first byte:
-  `0x00`, `0x01`, `0x02` and `0x08` select binary;
-  other bytes and empty input select text.
-* **Duplicate keys** - the AST preserves duplicate keys in source order.
-  Use `Node.All(key)` to retrieve all matches.
-  `Strict: true` rejects duplicates at parse time.
-* **Map conversions**:
-  * `ToMapLossy` applies last-write-wins for duplicate keys;
-  * `ToMapStrict` returns an error.
-  * `FromMapSorted` builds a document with lexicographically ordered keys
-    for deterministic output.
+[vdf]: https://pkg.go.dev/github.com/woozymasta/vdf

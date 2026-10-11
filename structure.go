@@ -10,15 +10,15 @@ type Map map[string]any
 
 // Event is a streaming traversal event.
 type Event struct {
-	// StringValue is set for EventString.
+	// StringValue is set for [EventString].
 	StringValue *string `json:"string_value,omitempty" yaml:"string_value,omitempty"`
-	// Uint32Value is set for EventUint32.
+	// Uint32Value is set for [EventUint32].
 	Uint32Value *uint32 `json:"uint32_value,omitempty" yaml:"uint32_value,omitempty"`
 	// Key is the node key associated with this event.
 	Key string `json:"key,omitempty" yaml:"key,omitempty"`
-	// Depth is traversal depth; scalar leaves may exceed DecodeOptions.MaxDepth.
+	// Depth is traversal depth; scalar leaves may exceed [DecodeOptions.MaxDepth].
 	Depth int `json:"depth" yaml:"depth"`
-	// Type is the event kind.
+	// Type is the [EventType] kind.
 	Type EventType `json:"type" yaml:"type"`
 }
 
@@ -88,9 +88,9 @@ type DecodeOptions struct {
 	// MaxStringBytes is a convenience ceiling applied to both keys and values
 	// when their specific limit is zero (0 means unlimited).
 	MaxStringBytes int
-	// Format selects expected input format.
+	// Format selects expected input [Format].
 	Format Format
-	// Strict enables stricter validation paths where available.
+	// Strict rejects duplicate keys during decoding.
 	Strict bool
 }
 
@@ -98,11 +98,11 @@ type DecodeOptions struct {
 type EncodeOptions struct {
 	// Indent sets one indentation level for text format.
 	Indent string
-	// Format selects output format.
+	// Format selects output [Format].
 	Format Format
 	// Compact enables compact text encoding.
 	Compact bool
-	// Deterministic enables stable key ordering during encode.
+	// Deterministic enables stable key ordering during encoding.
 	Deterministic bool
 	// Validate enables full document validation before encoding.
 	Validate bool
@@ -113,6 +113,8 @@ type Format uint8
 
 const (
 	// FormatAuto enables format auto-detection for decoding.
+	// For encoding, [Encoder.EncodeDocument] follows [Document.Format]
+	// when recognized and otherwise uses [FormatText].
 	FormatAuto Format = iota
 	// FormatText selects text VDF format.
 	FormatText

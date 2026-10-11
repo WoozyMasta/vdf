@@ -109,8 +109,10 @@ func (d *Decoder) DecodeDocument() (*Document, error) {
 // subsequent calls traverse that AST in depth-first order.
 // Returns io.EOF when all events have been emitted.
 //
-// Use WalkEvents when you need the full document available for further access after iteration.
-// For a one-pass, lower-memory alternative see NextEvent.
+// Use [Decoder.WalkEvents] when you need the full document available
+// for further access after iteration.
+// For a one-pass, lower-memory alternative, use [Decoder.NextEvent].
+// The modes are exclusive on one decoder.
 func (d *Decoder) WalkEvents() (Event, error) {
 	if d.mode == decoderModeStream {
 		return Event{}, fmt.Errorf("%w: NextEvent streaming is already active on this decoder", ErrInvalidNodeState)
@@ -139,11 +141,11 @@ func (d *Decoder) WalkEvents() (Event, error) {
 // subsequent calls continue from that position.
 // Returns io.EOF when all events have been consumed.
 //
-// NextEvent is a true streaming decoder:
+// [Decoder.NextEvent] is a true streaming decoder:
 // it reads and yields events one at a time with no intermediate AST,
 // making it suitable for large inputs or constrained memory environments.
 // The decoded document is not available after iteration;
-// use WalkEvents when post-iteration document access is required.
+// use [Decoder.WalkEvents] when post-iteration document access is required.
 func (d *Decoder) NextEvent() (Event, error) {
 	if d.mode == decoderModeAST {
 		return Event{}, fmt.Errorf("%w: AST decoding is already active on this decoder", ErrInvalidNodeState)

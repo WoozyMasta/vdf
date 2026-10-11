@@ -7,6 +7,7 @@ package vdf
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -39,6 +40,12 @@ func textFuzzSeeds() [][]byte {
 
 // binaryFuzzSeeds returns a pre-encoded binary VDF payload as a seed.
 func binaryFuzzSeeds() [][]byte {
+	seeds := [][]byte{
+		{binaryTypeMapEnd},
+		{binaryTypeMapStart, 'r', 0},
+		{binaryTypeString, 'k'},
+	}
+
 	doc := NewDocument()
 	root := NewObjectNode("shortcuts")
 	entry := NewObjectNode("0")
@@ -49,10 +56,28 @@ func binaryFuzzSeeds() [][]byte {
 
 	payload, err := AppendBinary(nil, doc, EncodeOptions{Format: FormatBinary})
 	if err != nil {
-		return nil
+		return seeds
+	}
+	seeds = append(seeds, payload)
+
+	longKeyDoc := NewDocument()
+	longKeyDoc.AddRoot(NewObjectNode(strings.Repeat("k", 128)))
+	longKeyPayload, err := AppendBinary(nil, longKeyDoc, EncodeOptions{Format: FormatBinary})
+	if err == nil {
+		seeds = append(seeds, longKeyPayload)
 	}
 
-	return [][]byte{payload}
+	duplicateDoc := NewDocument()
+	duplicateRoot := NewObjectNode("root")
+	duplicateRoot.Add(NewStringNode("duplicate", "first"))
+	duplicateRoot.Add(NewStringNode("duplicate", "second"))
+	duplicateDoc.AddRoot(duplicateRoot)
+	duplicatePayload, err := AppendBinary(nil, duplicateDoc, EncodeOptions{Format: FormatBinary})
+	if err == nil {
+		seeds = append(seeds, duplicatePayload)
+	}
+
+	return seeds
 }
 
 func FuzzTextParser(f *testing.F) {
@@ -85,6 +110,30 @@ func FuzzBinaryParser(f *testing.F) {
 
 		if err := doc.Validate(); err != nil {
 			t.Fatalf("parsed document failed Validate(): %v", err)
+		}
+	})
+}
+
+func FuzzStrictDuplicateParser(f *testing.F) {
+	for _, seed := range textFuzzSeeds() {
+		f.Add(seed, false)
+	}
+	for _, seed := range binaryFuzzSeeds() {
+		f.Add(seed, true)
+	}
+
+	f.Fuzz(func(t *testing.T, data []byte, binary bool) {
+		format := FormatText
+		if binary {
+			format = FormatBinary
+		}
+		doc, err := ParseBytes(data, DecodeOptions{Format: format, Strict: true})
+		if err != nil {
+			return
+		}
+
+		if err := doc.Validate(); err != nil {
+			t.Fatalf("strict parser produced invalid document: %v", err)
 		}
 	})
 }
@@ -133,6 +182,10 @@ func FuzzParseAuto(f *testing.F) {
 func FuzzTextParserLimits(f *testing.F) {
 	for _, seed := range textFuzzSeeds() {
 		f.Add(seed)
+	}
+	for _, size := range []int{63, 64, 65} {
+		f.Add([]byte(`"` + strings.Repeat("k", size) + `" "v"`))
+		f.Add([]byte(`"k" "` + strings.Repeat("v", size) + `"`))
 	}
 
 	f.Fuzz(func(t *testing.T, data []byte) {

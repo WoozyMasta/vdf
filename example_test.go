@@ -49,12 +49,9 @@ func ExampleWriteString() {
 		return
 	}
 
-	fmt.Println(strings.Contains(text, `"app"`))
-	fmt.Println(strings.Contains(text, `"id"`))
+	fmt.Println(strings.Join(strings.Fields(text), " "))
 
-	// Output:
-	// true
-	// true
+	// Output: "app" { "name" "demo" "id" "7" }
 }
 
 func ExampleDecoder_WalkEvents() {

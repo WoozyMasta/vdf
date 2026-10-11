@@ -24,7 +24,7 @@ const (
 	encoderModeDocument
 )
 
-// Encoder encodes VDF documents to an output stream.
+// Encoder encodes one logical VDF document to an output stream.
 type Encoder struct {
 	w           io.Writer     // Writer for the output.
 	writeErr    error         // Terminal error after output may have been partially written.
@@ -42,7 +42,8 @@ func NewEncoder(w io.Writer, opts EncodeOptions) *Encoder {
 	}
 }
 
-// EncodeDocument encodes a complete document in selected output format.
+// EncodeDocument encodes one complete document in the selected output format.
+// An Encoder cannot be reused for another document or mixed with manual writes.
 func (e *Encoder) EncodeDocument(doc *Document) error {
 	if err := e.available(); err != nil {
 		return err
@@ -208,7 +209,9 @@ func (e *Encoder) EndObject() error {
 	return nil
 }
 
-// Close finalizes manual streaming state.
+// Close finalizes manual streaming output.
+// Binary mode writes the document terminator.
+// A successful call is idempotent; later writes return an error.
 func (e *Encoder) Close() error {
 	if err := e.available(); err != nil {
 		return err
