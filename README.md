@@ -7,6 +7,10 @@ and duplicate keys in an ordered document tree.
 This makes it useful for game tools and config converters
 that need to preserve details ordinary maps cannot represent.
 
+See the [Valve VDF reference][vdf-ref] for format background
+and the official [Steamworks IGA docs][iga]
+for a VDF-based KeyValues document and examples.
+
 The package supports VDF text and a documented subset of the binary format,
 as well as mapping between VDF documents and Go structs.
 
@@ -99,3 +103,5 @@ use those interfaces for scalar conversion.
 <!-- links -->
 
 [vdf]: https://pkg.go.dev/github.com/woozymasta/vdf
+[vdf-ref]: https://developer.valvesoftware.com/wiki/VDF
+[iga]: https://partner.steamgames.com/doc/features/steam_controller/iga_file
