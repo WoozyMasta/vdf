@@ -14,36 +14,31 @@ and this project adheres to [Semantic Versioning][].
 ### Removed
 -->
 
-## Unreleased
+## [0.2.2][] - 2026-10-19
 
 ### Fixed
 
-* Map conversion now compiles on 32-bit targets
-  while preserving integer range checks.
-* Full-document encoding with `FormatAuto` now follows `Document.Format`,
-  defaulting to text when the document format is also automatic.
-* `FormatAuto` now identifies binary input from its first type byte
-  and uses the same one-byte detection path
-  for full-document and streaming decoders.
-* Binary decoding now requires the document terminator
-  and rejects unknown type bytes before attempting to read their keys.
-* Text key and value limits now stop token accumulation
-  at their context-specific byte limits.
-* Strict duplicate keys are rejected before decoding their values or subtrees.
-* `MaxDepth` now limits object nesting consistently
-  across full and streaming decoders;
-  scalar leaves do not consume object depth.
-* Decoder modes reject reader reuse across AST and streaming paths;
-  streaming errors are terminal and object-end events include their keys.
-* Reflection unmarshal rejects integer overflow and invalid boolean values,
-  and returns errors for nil documents and malformed scalar nodes.
-* Indexed reflection slices decode by canonical numeric keys
-  and reject gaps, duplicates, and malformed indices.
-* Pointer-receiver `TextMarshaler` methods work
-  for unaddressable values through an addressable copy.
-* Encoder lifecycle and malformed-node errors are deterministic,
-  including empty manual binary document termination.
-* `FromMapSorted` sorts nested maps lexicographically at every level.
+* `FormatAuto` now detects binary from first type byte in both decoder paths.
+  Encoding follows `Document.Format` and defaults to text
+  when the document format is also automatic.
+* Binary decoding requires the document terminator and rejects unknown types.
+  Text and binary decoders enforce key and value limits while reading.
+* Strict duplicate detection and `MaxDepth` behavior are consistent
+  across full-document and streaming decoders.
+  Scalar leaves do not consume depth.
+* Decoder event modes cannot be mixed on the same decoder.
+  Streaming errors are terminal, and object-end events include their keys.
+* Reflection unmarshal rejects integer overflow,
+  invalid booleans, nil documents, and malformed scalar nodes.
+  Indexed slices require canonical, contiguous numeric keys;
+  pointer-receiver `TextMarshaler` methods work for unaddressable values.
+* Encoder lifecycle and malformed-node errors are deterministic.
+  Closing a manual binary encoder writes the document terminator,
+  including for an empty document.
+* Map conversion works on 32-bit targets without truncating integers,
+  and `FromMapSorted` sorts nested maps lexicographically at every level.
+
+[0.2.2]: https://github.com/WoozyMasta/vdf/compare/v0.2.1...v0.2.2
 
 ## [0.2.1][] - 2026-06-24
 
