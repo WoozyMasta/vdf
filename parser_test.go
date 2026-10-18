@@ -113,6 +113,14 @@ func TestFormatAutoDetection(t *testing.T) {
 				t.Fatalf("DecodeDocument format = %v, want %v", doc.Format, test.wantFormat)
 			}
 
+			autoDoc, err := ParseAuto(test.input)
+			if err != nil {
+				t.Fatalf("ParseAuto() error = %v", err)
+			}
+			if autoDoc.Format != test.wantFormat {
+				t.Fatalf("ParseAuto() format = %v, want %v", autoDoc.Format, test.wantFormat)
+			}
+
 			dec := NewDecoder(bytes.NewReader(test.input), DecodeOptions{Format: FormatAuto})
 			first, err := dec.NextEvent()
 			if err != nil {

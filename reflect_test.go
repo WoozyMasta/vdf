@@ -727,6 +727,20 @@ func TestUnmarshalRejectsInvalidDocumentAndScalarNodes(t *testing.T) {
 	}
 }
 
+func TestUnmarshalRejectsCyclicObject(t *testing.T) {
+	t.Parallel()
+
+	root := NewObjectNode("root")
+	root.Add(root)
+	doc := NewDocument()
+	doc.AddRoot(root)
+
+	var out struct{}
+	if err := Unmarshal(doc, "root", &out); !errors.Is(err, ErrInvalidNodeState) {
+		t.Fatalf("Unmarshal(cyclic document): error = %v, want ErrInvalidNodeState", err)
+	}
+}
+
 func TestUnmarshalBoolValues(t *testing.T) {
 	t.Parallel()
 

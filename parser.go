@@ -236,12 +236,17 @@ func detectStreamFormat(r *bufio.Reader) (Format, error) {
 		return FormatText, nil
 	}
 
-	switch first[0] {
+	return formatFromTypeByte(first[0]), nil
+}
+
+// formatFromTypeByte selects the binary format for supported type markers.
+func formatFromTypeByte(first byte) Format {
+	switch first {
 	case binaryTypeMapStart, binaryTypeString, binaryTypeNumber, binaryTypeMapEnd:
-		return FormatBinary, nil
+		return FormatBinary
 
 	default:
-		return FormatText, nil
+		return FormatText
 	}
 }
 

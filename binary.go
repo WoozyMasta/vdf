@@ -6,7 +6,12 @@ package vdf
 
 // ParseAuto decodes VDF bytes with automatic format detection.
 func ParseAuto(data []byte) (*Document, error) {
-	return ParseBytes(data, DecodeOptions{Format: FormatAuto})
+	format := FormatText
+	if len(data) > 0 {
+		format = formatFromTypeByte(data[0])
+	}
+
+	return ParseBytes(data, DecodeOptions{Format: format})
 }
 
 // ParseAutoFile decodes VDF file with automatic format detection.

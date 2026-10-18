@@ -55,8 +55,9 @@ func shouldOmit(fv reflect.Value, tag vdfTag) bool {
 	return false
 }
 
-// fieldInfo maps a struct field index to its parsed VDF tag.
+// fieldInfo caches the index, name, and parsed VDF tag for one struct field.
 type fieldInfo struct {
+	name  string
 	tag   vdfTag
 	index int
 }
@@ -83,7 +84,7 @@ func getFields(t reflect.Type) []fieldInfo {
 		}
 
 		tag := parseVDFTag(f)
-		fields = append(fields, fieldInfo{index: i, tag: tag})
+		fields = append(fields, fieldInfo{index: i, name: f.Name, tag: tag})
 	}
 
 	fieldCache.Store(t, fields)
@@ -153,7 +154,6 @@ func marshalStructToNode(key string, rv reflect.Value) (*Node, error) {
 
 	for _, fi := range fields {
 		fv := rv.Field(fi.index)
-		ft := rv.Type().Field(fi.index)
 
 		if shouldOmit(fv, fi.tag) {
 			continue
@@ -175,7 +175,7 @@ func marshalStructToNode(key string, rv reflect.Value) (*Node, error) {
 			}
 
 			if tmp.Kind() != reflect.Struct {
-				return nil, fmt.Errorf("%w: inline field %q must be a struct", ErrReflectUnsupportedType, ft.Name)
+				return nil, fmt.Errorf("%w: inline field %q must be a struct", ErrReflectUnsupportedType, fi.name)
 			}
 
 			inlineNode, err := marshalStructToNode("__inline__", tmp)
@@ -189,7 +189,7 @@ func marshalStructToNode(key string, rv reflect.Value) (*Node, error) {
 
 		nodes, err := marshalValue(fi.tag.name, fi.tag, fv)
 		if err != nil {
-			return nil, fmt.Errorf("field %q: %w", ft.Name, err)
+			return nil, fmt.Errorf("field %q: %w", fi.name, err)
 		}
 
 		obj.Children = append(obj.Children, nodes...)
@@ -304,6 +304,11 @@ func marshalValue(key string, tag vdfTag, rv reflect.Value) ([]*Node, error) {
 
 // marshalTextValue invokes TextMarshaler with value-receiver precedence.
 func marshalTextValue(key string, rv reflect.Value) (*Node, bool, error) {
+	// Built-in and unnamed types cannot define methods, so skip interface checks.
+	if rv.Type().PkgPath() == "" {
+		return nil, false, nil
+	}
+
 	if rv.CanInterface() && rv.Type().Implements(textMarshalerType) {
 		text, err := rv.Interface().(encoding.TextMarshaler).MarshalText()
 		if err != nil {
@@ -361,11 +366,43 @@ func Unmarshal(doc *Document, root string, out any) error {
 	if rootNode == nil {
 		return fmt.Errorf("%w: root key %q not found in document", ErrReflectFieldMismatch, root)
 	}
-	if err := validateNode(rootNode, make(map[*Node]struct{})); err != nil {
-		return fmt.Errorf("root %q: %w", root, err)
+	if !isFlatScalarObject(rootNode) {
+		if err := validateNode(rootNode, make(map[*Node]struct{})); err != nil {
+			return fmt.Errorf("root %q: %w", root, err)
+		}
 	}
 
 	return unmarshalNode(rootNode, rv)
+}
+
+// isFlatScalarObject checks whether an object contains only valid scalar leaves.
+func isFlatScalarObject(node *Node) bool {
+	if node == nil || node.Kind != NodeObject || node.StringValue != nil || node.Uint32Value != nil {
+		return false
+	}
+
+	for _, child := range node.Children {
+		if child == nil {
+			return false
+		}
+
+		switch child.Kind {
+		case NodeString:
+			if child.StringValue == nil || child.Uint32Value != nil || len(child.Children) != 0 {
+				return false
+			}
+
+		case NodeUint32:
+			if child.Uint32Value == nil || child.StringValue != nil || len(child.Children) != 0 {
+				return false
+			}
+
+		default:
+			return false
+		}
+	}
+
+	return true
 }
 
 // unmarshalNode populates rv from a VDF node.
@@ -503,7 +540,6 @@ func unmarshalStruct(node *Node, rv reflect.Value) error {
 
 	for _, fi := range fields {
 		fv := rv.Field(fi.index)
-		ft := rv.Type().Field(fi.index)
 
 		if fi.tag.inline {
 			tmp := fv
@@ -515,11 +551,11 @@ func unmarshalStruct(node *Node, rv reflect.Value) error {
 			}
 
 			if tmp.Kind() != reflect.Struct {
-				return fmt.Errorf("%w: inline field %q must be a struct", ErrReflectUnsupportedType, ft.Name)
+				return fmt.Errorf("%w: inline field %q must be a struct", ErrReflectUnsupportedType, fi.name)
 			}
 
 			if err := unmarshalStruct(node, tmp); err != nil {
-				return fmt.Errorf("inline field %q: %w", ft.Name, err)
+				return fmt.Errorf("inline field %q: %w", fi.name, err)
 			}
 			continue
 		}
@@ -532,7 +568,7 @@ func unmarshalStruct(node *Node, rv reflect.Value) error {
 
 			sliceType := fv.Type()
 			if sliceType.Kind() != reflect.Slice {
-				return fmt.Errorf("%w: repeated field %q must be a slice", ErrReflectUnsupportedType, ft.Name)
+				return fmt.Errorf("%w: repeated field %q must be a slice", ErrReflectUnsupportedType, fi.name)
 			}
 
 			elemType := sliceType.Elem()
@@ -540,7 +576,7 @@ func unmarshalStruct(node *Node, rv reflect.Value) error {
 			for i, child := range children {
 				elem := reflect.New(elemType).Elem()
 				if err := unmarshalNode(child, elem); err != nil {
-					return fmt.Errorf("repeated field %q[%d]: %w", ft.Name, i, err)
+					return fmt.Errorf("repeated field %q[%d]: %w", fi.name, i, err)
 				}
 				slice = reflect.Append(slice, elem)
 			}
@@ -555,12 +591,12 @@ func unmarshalStruct(node *Node, rv reflect.Value) error {
 			}
 
 			if child.Kind != NodeObject {
-				return fmt.Errorf("%w: indexed field %q expects object node", ErrReflectFieldMismatch, ft.Name)
+				return fmt.Errorf("%w: indexed field %q expects object node", ErrReflectFieldMismatch, fi.name)
 			}
 
 			sliceType := fv.Type()
 			if sliceType.Kind() != reflect.Slice {
-				return fmt.Errorf("%w: indexed field %q must be a slice", ErrReflectUnsupportedType, ft.Name)
+				return fmt.Errorf("%w: indexed field %q must be a slice", ErrReflectUnsupportedType, fi.name)
 			}
 
 			elemType := sliceType.Elem()
@@ -571,22 +607,22 @@ func unmarshalStruct(node *Node, rv reflect.Value) error {
 				if err != nil || index < 0 || strconv.Itoa(index) != c.Key {
 					return fmt.Errorf(
 						"%w: indexed field %q has non-canonical index %q",
-						ErrReflectFieldMismatch, ft.Name, c.Key)
+						ErrReflectFieldMismatch, fi.name, c.Key)
 				}
 				if index >= len(child.Children) {
 					return fmt.Errorf(
 						"%w: indexed field %q index %q is outside 0..%d",
-						ErrReflectFieldMismatch, ft.Name, c.Key, len(child.Children)-1)
+						ErrReflectFieldMismatch, fi.name, c.Key, len(child.Children)-1)
 				}
 				if seen[index] {
 					return fmt.Errorf(
 						"%w: indexed field %q has duplicate index %q",
-						ErrReflectFieldMismatch, ft.Name, c.Key)
+						ErrReflectFieldMismatch, fi.name, c.Key)
 				}
 
 				elem := reflect.New(elemType).Elem()
 				if err := unmarshalNode(c, elem); err != nil {
-					return fmt.Errorf("indexed field %q[%d]: %w", ft.Name, index, err)
+					return fmt.Errorf("indexed field %q[%d]: %w", fi.name, index, err)
 				}
 
 				slice.Index(index).Set(elem)
@@ -597,7 +633,7 @@ func unmarshalStruct(node *Node, rv reflect.Value) error {
 				if !exists {
 					return fmt.Errorf(
 						"%w: indexed field %q is missing index %d",
-						ErrReflectFieldMismatch, ft.Name, index)
+						ErrReflectFieldMismatch, fi.name, index)
 				}
 			}
 
@@ -611,7 +647,7 @@ func unmarshalStruct(node *Node, rv reflect.Value) error {
 		}
 
 		if err := unmarshalNode(child, fv); err != nil {
-			return fmt.Errorf("field %q: %w", ft.Name, err)
+			return fmt.Errorf("field %q: %w", fi.name, err)
 		}
 	}
 
